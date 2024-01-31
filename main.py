@@ -27,22 +27,26 @@ from monai.transforms import (
 from monai.data import Dataset, DataLoader
 from monai.utils import set_determinism
 import numpy as np
+
 print_config()
 
 # Load Data from Data Folder
-base_data_path = Path('/Users/iejohnson/School/spring_2024/AML/Supervised_learning/Data')
+base_data_path = Path(
+    "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/Data"
+)
 input_prostate_data = base_data_path / "OrigProstate/PROSTATEx"
 segmentation_data = base_data_path / "Segmentations/PROSTATEx"
 
 prostate_dirs = [x for x in input_prostate_data.iterdir() if x.is_dir()]
+
 
 def create_data_dict(prostate_dirs, segmentation_base):
     data_dict = {}
     for prostate_dir in prostate_dirs:
         patient_id = prostate_dir.name
         data_dict[patient_id] = {}
-        data_dict[patient_id]['prostate'] = prostate_dir
-        data_dict[patient_id]['segmentation'] = segmentation_base / patient_id
+        data_dict[patient_id]["prostate"] = prostate_dir
+        data_dict[patient_id]["segmentation"] = segmentation_base / patient_id
 
 
 print(prostate_dirs)
@@ -50,7 +54,6 @@ print(segmentation_dirs)
 
 
 # Starter code for creating and augmenting datasets
-
 
 
 # Create a list of dictionaries, each containing the filename for an image and its corresponding label
