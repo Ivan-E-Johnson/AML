@@ -32,51 +32,18 @@ print_config()
 
 # Load Data from Data Folder
 base_data_path = Path(
-    "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/Data"
+    "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/Data/SortedProstateData"
 )
-input_prostate_data = base_data_path / "OrigProstate/PROSTATEx"
-segmentation_data = base_data_path / "Segmentations/PROSTATEx"
-
-prostate_dirs = [x for x in input_prostate_data.iterdir() if x.is_dir()]
 
 
-def create_data_dict(prostate_dirs, segmentation_base):
-    data_dict = {}
-    for prostate_dir in prostate_dirs:
-        patient_id = prostate_dir.name
-        data_dict[patient_id] = {}
-        data_dict[patient_id]["prostate"] = prostate_dir
-        data_dict[patient_id]["segmentation"] = segmentation_base / patient_id
+def init_data_lists(base_data_path):
+    mask_paths = []
+    image_paths = []
+    for dir in base_data_path.iterdir():
+        if dir.is_dir():
+            mask_paths.append(dir / f"{dir.name}_prostate.nii.gz")
+            image_paths.append(dir / f"{dir.name}_segmentation.nii.gz")
+    return image_paths, mask_paths
 
 
-print(prostate_dirs)
-print(segmentation_dirs)
-
-
-# Starter code for creating and augmenting datasets
-
-
-# Create a list of dictionaries, each containing the filename for an image and its corresponding label
-# data_dicts = [{'image': img, 'label': lbl} for img, lbl in zip(image_files, label_files)]
-#
-# # Define transformations for augmenting the dataset
-# # MONAI's dictionary-based transforms expect dictionaries with keys matching those in the data_dicts
-# transforms = Compose([
-#     LoadImaged(keys=['image', 'label']),       # Load image and label
-#     AddChanneld(keys=['image', 'label']),     # Add channel dimension
-#     ScaleIntensityd(keys=['image']),          # Normalize image intensity
-#     RandRotated(keys=['image', 'label'], range=np.pi/4, prob=0.5),  # Random rotation
-#     RandFlipd(keys=['image', 'label'], spatial_axis=1, prob=0.5),   # Random flip
-#     RandAffined(keys=['image', 'label'], prob=0.5, translate_range=5), # Random affine transformations
-#     ToTensord(keys=['image', 'label'])        # Convert to PyTorch Tensor
-# ])
-#
-# # Create the dataset
-# # The Dataset class in MONAI is a simple wrapper around a list of data_dicts and the composed transforms
-# dataset = Dataset(data=data_dicts, transform=transforms)
-
-# Note: In this code, we apply a series of augmentations, including random rotations, flips,
-# and affine transformations. You can customize these based on your specific requirements.
-
-# The actual instantiation of the dataset object and the augmentation will occur when this
-# code is run in an environment with the necessary libraries installed.
+print("finished")
