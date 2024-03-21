@@ -49,3 +49,7 @@ typing_extensions==4.9.0
 tzdata==2023.4
 virtualenv==20.25.0
 jupyterlab
+notebook
+python-dotenv
+pytorch-ignite==0.4.13
+pytorch-lightning
