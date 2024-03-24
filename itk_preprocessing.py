@@ -550,9 +550,10 @@ def pre_process_images(base_data_path: Path):
             / subject_name
             / f"{subject_name}_resampled_segmentations.nii.gz"
         )
+        assert np.unique(itk.GetArrayViewFromImage(resampled_mask)).size == 5
         resampled_output_path.parent.mkdir(exist_ok=True, parents=True)
-        itk.imwrite(resampled_normalized_image, resampled_output_path)
-        itk.imwrite(resampled_mask, resampled_mask_path)
+        # itk.imwrite(resampled_normalized_image, resampled_output_path)
+        # itk.imwrite(resampled_mask, resampled_mask_path)
         # TODO: Normalize the images to have a mean of 0 and a standard deviation of 1 for t2W
         df = df._append(
             {
