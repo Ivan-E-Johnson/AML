@@ -58,7 +58,9 @@ from monai.transforms import (
     ToTensord,
 )
 from pytorch_lightning.cli import ReduceLROnPlateau
+from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
+from torch.utils.tensorboard._utils import make_grid
 
 print_config()
 from pathlib import Path
@@ -77,7 +79,7 @@ def init_data_lists():
     list: A list of mask paths.
     """
     base_data_path = Path(
-        "/home/iejohnson/programing/Supervised_learning/DATA/preprocessed_data"
+        "/home/jsome/PycharmProjects/AML/DATA/preprocessed_data"
     )
     mask_paths = []
     image_paths = []
@@ -305,6 +307,20 @@ class Net(pytorch_lightning.LightningModule):
         print(f"Output shape {output.shape}")
         loss = self.loss_function(output, labels)
         tensorboard_logs = {"train_loss": loss.item()}
+
+        predictions = torch.argmax(output, dim=1)  # Assuming output is logits
+        targets = labels  # Assuming labels are already one-hot encoded
+        accuracy = accuracy_score(targets.flatten(), predictions.flatten())
+        precision = precision_score(targets.flatten(), predictions.flatten(), average='weighted')
+        recall = recall_score(targets.flatten(), predictions.flatten(), average='weighted')
+        f1 = f1_score(targets.flatten(), predictions.flatten(), average='weighted')
+
+        # Log metrics
+        self.log("train_loss", loss, on_step=True, on_epoch=False)
+        self.log("train_accuracy", accuracy, on_step=True, on_epoch=False)
+        self.log("train_precision", precision, on_step=True, on_epoch=False)
+        self.log("train_recall", recall, on_step=True, on_epoch=False)
+        self.log("train_f1_score", f1, on_step=True, on_epoch=False)
         return {"loss": loss, "log": tensorboard_logs}
 
     def validation_step(self, batch, batch_idx):
@@ -330,6 +346,21 @@ class Net(pytorch_lightning.LightningModule):
         # self.log('val_sensitivity', sensitivity, on_step=False, on_epoch=True)
         self.log("val_loss", loss, on_step=False, on_epoch=True)
         self.log("val_dice", mean_val_dice, on_step=False, on_epoch=True)
+        # Calculate accuracy, precision, recall, and F1 score
+
+        predictions = torch.argmax(outputs, dim=1)  # Assuming outputs are logits
+        targets = labels  # Assuming labels are already one-hot encoded
+        accuracy = accuracy_score(targets.flatten(), predictions.flatten())
+        precision = precision_score(targets.flatten(), predictions.flatten(), average='weighted')
+        recall = recall_score(targets.flatten(), predictions.flatten(), average='weighted')
+        f1 = f1_score(targets.flatten(), predictions.flatten(), average='weighted')
+
+        # Log metrics
+        self.log("val_loss", loss, on_step=False, on_epoch=True)
+        self.log("val_accuracy", accuracy, on_step=False, on_epoch=True)
+        self.log("val_precision", precision, on_step=False, on_epoch=True)
+        self.log("val_recall", recall, on_step=False, on_epoch=True)
+        self.log("val_f1_score", f1, on_step=False, on_epoch=True)
         return d
 
     def on_validation_epoch_end(self):
@@ -385,12 +416,12 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
 
 
 if __name__ == "__main__":
+    # set up loggers and checkpoints
     # initialise the LightningModule
     net = Net()
 
-    # set up loggers and checkpoints
     log_dir = os.path.join(
-        "/home/iejohnson/PycharmProjects/AML/AML_Project_Supervised", "logs"
+        "/home/jsome/PycharmProjects/AML/AML_Project_Supervised", "logs"
     )
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
         save_dir=log_dir, name="lightning_logs"
@@ -407,7 +438,7 @@ if __name__ == "__main__":
         filename="checkpoint-{epoch:02d}-{val_dice:.2f}",
     )
     trainer = pytorch_lightning.Trainer(
-        max_epochs=600,
+        max_epochs=2,
         logger=tb_logger,
         enable_checkpointing=True,
         enable_progress_bar=True,
