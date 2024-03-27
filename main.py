@@ -58,6 +58,7 @@ from monai.transforms import (
     ToTensord,
 )
 from pytorch_lightning.cli import ReduceLROnPlateau
+from pytorch_lightning.profilers import SimpleProfiler
 from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
 from torch.utils.tensorboard._utils import make_grid
@@ -79,7 +80,7 @@ def init_data_lists():
     list: A list of mask paths.
     """
     base_data_path = Path(
-        "/home/jsome/PycharmProjects/AML/DATA/preprocessed_data"
+        "/home/iejohnson/programing/Supervised_learning/DATA/preprocessed_data"
     )
     mask_paths = []
     image_paths = []
@@ -166,7 +167,6 @@ class Net(pytorch_lightning.LightningModule):
         )
         self.best_val_dice = 0
         self.best_val_epoch = 0
-        self.validation_step_outputs = []
         self.prepare_data()
 
     def forward(self, x):
@@ -202,7 +202,7 @@ class Net(pytorch_lightning.LightningModule):
         ]
 
         # set the data transforms
-        RandFlipd_prob = 0.35
+        RandFlipd_prob = 0.5
 
         # set deterministic training for reproducibility
 
@@ -228,7 +228,7 @@ class Net(pytorch_lightning.LightningModule):
                     keys=["image", "label"]
                 ),  # Add channel to image and mask so
                 ToTensord(keys=["image", "label"]),
-                DataStatsD(keys=["image", "label"]),
+                # DataStatsD(keys=["image", "label"]),
             ]
         )
 
@@ -269,7 +269,7 @@ class Net(pytorch_lightning.LightningModule):
         Returns:
         DataLoader: The validation data loader.
         """
-        val_loader = DataLoader(self.val_ds, batch_size=2, num_workers=4)
+        val_loader = DataLoader(self.val_ds, batch_size=1, num_workers=4)
         return val_loader
 
     def configure_optimizers(self):
@@ -300,95 +300,91 @@ class Net(pytorch_lightning.LightningModule):
         dict: The loss and the logs.
         """
         images, labels = batch["image"], batch["label"]
-        print("Training Step")
-        print(f"Images.Shape = {images.shape}")
-        print(f"Labels.Shape = {labels.shape}")
+        # print("Training Step")
+        # print(f"Images.Shape = {images.shape}")
+        # print(f"Labels.Shape = {labels.shape}")
         output = self.forward(images)
-        print(f"Output shape {output.shape}")
+        # print(f"Output shape {output.shape}")
         loss = self.loss_function(output, labels)
-        tensorboard_logs = {"train_loss": loss.item()}
 
         predictions = torch.argmax(output, dim=1)  # Assuming output is logits
         targets = labels  # Assuming labels are already one-hot encoded
         accuracy = accuracy_score(targets.flatten(), predictions.flatten())
-        precision = precision_score(targets.flatten(), predictions.flatten(), average='weighted')
-        recall = recall_score(targets.flatten(), predictions.flatten(), average='weighted')
-        f1 = f1_score(targets.flatten(), predictions.flatten(), average='weighted')
 
         # Log metrics
-        self.log("train_loss", loss, on_step=True, on_epoch=False)
-        self.log("train_accuracy", accuracy, on_step=True, on_epoch=False)
-        self.log("train_precision", precision, on_step=True, on_epoch=False)
-        self.log("train_recall", recall, on_step=True, on_epoch=False)
-        self.log("train_f1_score", f1, on_step=True, on_epoch=False)
-        return {"loss": loss, "log": tensorboard_logs}
+        self.log("train_loss", loss, on_step=True, on_epoch=False, reduce_fx=torch.mean)
+        self.log(
+            "train_accuracy",
+            accuracy,
+            on_step=True,
+            on_epoch=False,
+            reduce_fx=torch.mean,
+        )
+        return loss
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch["image"], batch["label"]
-        print("Validation Step")
-        print(f"Images.Shape = {images.shape}")
-        print(f"Labels.Shape = {labels.shape}")
+        # print("Validation Step")
+        # print(f"Images.Shape = {images.shape}")
+        # print(f"Labels.Shape = {labels.shape}")
         outputs = self.forward(images)
-        print(f"Outputs shape {outputs.shape}")
-        print(f"Shape before post_pred: {outputs.shape}")
+        # print(f"Outputs shape {outputs.shape}")
+        # print(f"Shape before post_pred: {outputs.shape}")
         outputs = torch.stack(
             [self.post_pred(i) for i in decollate_batch(outputs)]
         )  # Stack the processed outputs back into a tensor
         labels = torch.stack(
             [self.post_label(i) for i in decollate_batch(labels)]
         )  # Do the same for labels if necessary
-        print(f"Shape after post_pred: {outputs.shape}")
+        # print(f"Shape after post_pred: {outputs.shape}")
         loss = self.loss_function(outputs, labels)
         self.dice_metric(y_pred=outputs, y=labels)
         mean_val_dice = self.dice_metric.aggregate().item()
-        d = {"val_loss": loss, "val_number": len(outputs), "val_dice": mean_val_dice}
-        self.validation_step_outputs.append(d)
-        # self.log('val_sensitivity', sensitivity, on_step=False, on_epoch=True)
-        self.log("val_loss", loss, on_step=False, on_epoch=True)
-        self.log("val_dice", mean_val_dice, on_step=False, on_epoch=True)
-        # Calculate accuracy, precision, recall, and F1 score
 
-        predictions = torch.argmax(outputs, dim=1)  # Assuming outputs are logits
+        # Calculate accuracy, precision, recall, and F1 score
+        predictions = torch.argmax(outputs, dim=1)  # Assuming output is logits
         targets = labels  # Assuming labels are already one-hot encoded
         accuracy = accuracy_score(targets.flatten(), predictions.flatten())
-        precision = precision_score(targets.flatten(), predictions.flatten(), average='weighted')
-        recall = recall_score(targets.flatten(), predictions.flatten(), average='weighted')
-        f1 = f1_score(targets.flatten(), predictions.flatten(), average='weighted')
+        precision = precision_score(
+            targets.flatten(), predictions.flatten(), average="weighted"
+        )
+        recall = recall_score(
+            targets.flatten(), predictions.flatten(), average="weighted"
+        )
 
         # Log metrics
-        self.log("val_loss", loss, on_step=False, on_epoch=True)
-        self.log("val_accuracy", accuracy, on_step=False, on_epoch=True)
-        self.log("val_precision", precision, on_step=False, on_epoch=True)
-        self.log("val_recall", recall, on_step=False, on_epoch=True)
-        self.log("val_f1_score", f1, on_step=False, on_epoch=True)
-        return d
-
-    def on_validation_epoch_end(self):
-        """
-        This function is called at the end of the validation epoch.
-        """
-        val_loss, num_items = 0, 0
-        for output in self.validation_step_outputs:
-            val_loss += output["val_loss"].sum().item()
-            num_items += output["val_number"]
-        mean_val_dice = self.dice_metric.aggregate().item()
-        self.dice_metric.reset()
-        mean_val_loss = torch.tensor(val_loss / num_items)
-        tensorboard_logs = {
-            "val_dice": mean_val_dice,
-            "val_loss": mean_val_loss,
-        }
-        if mean_val_dice > self.best_val_dice:
-            self.best_val_dice = mean_val_dice
-            self.best_val_epoch = self.current_epoch
-        print(
-            f"current epoch: {self.current_epoch} "
-            f"current mean dice: {mean_val_dice:.4f}"
-            f"\nbest mean dice: {self.best_val_dice:.4f} "
-            f"at epoch: {self.best_val_epoch}"
+        self.log(
+            "val_dice",
+            mean_val_dice,
+            on_step=False,
+            on_epoch=True,
+            batch_size=images.shape[0],
         )
-        self.validation_step_outputs.clear()  # free memory
-        return {"log": tensorboard_logs}
+        self.log(
+            "val_loss", loss, on_step=False, on_epoch=True, batch_size=images.shape[0]
+        )
+        self.log(
+            "val_accuracy",
+            accuracy,
+            on_step=False,
+            on_epoch=True,
+            batch_size=images.shape[0],
+        )
+        self.log(
+            "val_precision",
+            precision,
+            on_step=False,
+            on_epoch=True,
+            batch_size=images.shape[0],
+        )
+        self.log(
+            "val_recall",
+            recall,
+            on_step=False,
+            on_epoch=True,
+            batch_size=images.shape[0],
+        )
+        return loss
 
 
 class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
@@ -416,35 +412,38 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
 
 
 if __name__ == "__main__":
+    print("*" * 80)
+    print(f"Device: {device}")
+    print(f"Cuda available: {torch.cuda.is_available()}")
+    print("*" * 80)
+
     # set up loggers and checkpoints
     # initialise the LightningModule
     net = Net()
-
-    log_dir = os.path.join(
-        "/home/jsome/PycharmProjects/AML/AML_Project_Supervised", "logs"
-    )
+    current_file_loc = Path(__file__).parent
+    log_dir = current_file_loc / "logs"
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
-        save_dir=log_dir, name="lightning_logs"
+        save_dir=log_dir.as_posix(), name="3_26_24_lightning_logs"
     )
     os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     # initialise Lightning's trainer.
-
+    profiler = SimpleProfiler()
     checkpoint_callback = ModelCheckpoint(
         monitor="val_dice",
         mode="max",
         save_last=True,
-        dirpath=log_dir,
+        dirpath=log_dir.as_posix(),
         filename="checkpoint-{epoch:02d}-{val_dice:.2f}",
     )
     trainer = pytorch_lightning.Trainer(
-        max_epochs=2,
+        max_epochs=10,
         logger=tb_logger,
+        # accelerator="gpu",
         enable_checkpointing=True,
-        enable_progress_bar=True,
-        enable_model_summary=True,
         num_sanity_val_steps=1,
         log_every_n_steps=5,
+        profiler=profiler,
         callbacks=[
             BestModelCheckpoint(),
             checkpoint_callback,
