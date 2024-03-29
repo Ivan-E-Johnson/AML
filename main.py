@@ -1,3 +1,4 @@
+import itk
 import numpy as np
 import pytorch_lightning
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -80,7 +81,7 @@ def init_data_lists():
     list: A list of mask paths.
     """
     base_data_path = Path(
-        "/home/iejohnson/programing/Supervised_learning/DATA/preprocessed_data"
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/preprocessed_data"
     )
     mask_paths = []
     image_paths = []
@@ -124,7 +125,7 @@ class Net(pytorch_lightning.LightningModule):
     validation_step_outputs (list): The outputs of the validation step.
     """
 
-    def __init__(self):
+    def __init__(self, is_testing=False):
         super().__init__()
         self.number_of_classes = 5  # INCLUDES BACKGROUND
         self._model = UNet(
@@ -136,6 +137,7 @@ class Net(pytorch_lightning.LightningModule):
             num_res_units=2,
             norm=Norm.BATCH,
         )
+        self.is_testing = is_testing
 
         self.loss_function = DiceCELoss(
             softmax=True, to_onehot_y=True, squared_pred=True
@@ -146,10 +148,6 @@ class Net(pytorch_lightning.LightningModule):
         self.post_pred = Compose(
             [
                 EnsureType(),  # Ensure tensor type
-                Activations(softmax=True),  # Apply softmax to output logits
-                AsDiscrete(
-                    argmax=True, to_onehot=self.number_of_classes
-                ),  # Convert to one-hot encoded format
             ]
         )
 
@@ -163,7 +161,7 @@ class Net(pytorch_lightning.LightningModule):
             include_background=False,
             reduction="mean",
             get_not_nans=False,
-            num_classes=self.number_of_classes,
+            num_classes=None,  # Infered from the data
         )
         self.best_val_dice = 0
         self.best_val_epoch = 0
@@ -200,6 +198,9 @@ class Net(pytorch_lightning.LightningModule):
             {"image": img_path, "label": mask_path}
             for img_path, mask_path in zip(test_image_paths, test_mask_paths)
         ]
+        if self.is_testing:
+            train_files = train_files[:5]
+            val_files = val_files[:1]
 
         # set the data transforms
         RandFlipd_prob = 0.5
@@ -274,19 +275,20 @@ class Net(pytorch_lightning.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        scheduler = ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=0.1,
-            patience=10,
-            verbose=True,
-            monitor="val_loss",
-        )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-            "monitor": "val_loss",
-        }
+        return optimizer
+        # scheduler = ReduceLROnPlateau(
+        #     optimizer,
+        #     mode="min",
+        #     factor=0.1,
+        #     patience=10,
+        #     verbose=True,
+        #     monitor="val_loss",
+        # )
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": scheduler,
+        #     "monitor": "val_loss",
+        # }
 
     def training_step(self, batch, batch_idx):
         """
@@ -302,49 +304,49 @@ class Net(pytorch_lightning.LightningModule):
         images, labels = batch["image"], batch["label"]
         # print("Training Step")
         # print(f"Images.Shape = {images.shape}")
-        # print(f"Labels.Shape = {labels.shape}")
+        print(f"Labels.Shape = {labels.shape}")
         output = self.forward(images)
-        # print(f"Output shape {output.shape}")
+        print(f"Output shape {output.shape}")
         loss = self.loss_function(output, labels)
-
-        predictions = torch.argmax(output, dim=1)  # Assuming output is logits
-        targets = labels  # Assuming labels are already one-hot encoded
-        accuracy = accuracy_score(targets.flatten(), predictions.flatten())
-
+        # Colapsing the output to a single channel
+        predictions = torch.argmax(
+            output, dim=1, keepdim=True
+        )  # Assuming output is logits
+        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
         # Log metrics
-        self.log("train_loss", loss, on_step=True, on_epoch=False, reduce_fx=torch.mean)
         self.log(
-            "train_accuracy",
-            accuracy,
+            "train_dice",
+            dice,
             on_step=True,
-            on_epoch=False,
+            on_epoch=True,
             reduce_fx=torch.mean,
         )
+        self.log("train_loss", loss, on_step=True, on_epoch=True, reduce_fx=torch.mean)
         return loss
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch["image"], batch["label"]
-        # print("Validation Step")
-        # print(f"Images.Shape = {images.shape}")
-        # print(f"Labels.Shape = {labels.shape}")
+
         outputs = self.forward(images)
-        # print(f"Outputs shape {outputs.shape}")
-        # print(f"Shape before post_pred: {outputs.shape}")
-        outputs = torch.stack(
-            [self.post_pred(i) for i in decollate_batch(outputs)]
-        )  # Stack the processed outputs back into a tensor
-        labels = torch.stack(
-            [self.post_label(i) for i in decollate_batch(labels)]
-        )  # Do the same for labels if necessary
-        # print(f"Shape after post_pred: {outputs.shape}")
+        if self.is_testing:
+            print("Validation Step")
+            print(f"Images.Shape = {images.shape}")
+            print(f"Labels.Shape = {labels.shape}")
+            print(f"Shape after post_pred: {outputs.shape}")
+
         loss = self.loss_function(outputs, labels)
-        self.dice_metric(y_pred=outputs, y=labels)
-        mean_val_dice = self.dice_metric.aggregate().item()
 
         # Calculate accuracy, precision, recall, and F1 score
-        predictions = torch.argmax(outputs, dim=1)  # Assuming output is logits
+        predictions = torch.argmax(
+            outputs, dim=1, keepdim=True
+        )  # Assuming output is logits
+
+        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
+
+        if self.is_testing:
+            print(f"Predictions shape: {predictions.shape}")
+            print(f"Dice: {dice}")
         targets = labels  # Assuming labels are already one-hot encoded
-        accuracy = accuracy_score(targets.flatten(), predictions.flatten())
         precision = precision_score(
             targets.flatten(), predictions.flatten(), average="weighted"
         )
@@ -355,20 +357,13 @@ class Net(pytorch_lightning.LightningModule):
         # Log metrics
         self.log(
             "val_dice",
-            mean_val_dice,
+            dice,
             on_step=False,
             on_epoch=True,
             batch_size=images.shape[0],
         )
         self.log(
             "val_loss", loss, on_step=False, on_epoch=True, batch_size=images.shape[0]
-        )
-        self.log(
-            "val_accuracy",
-            accuracy,
-            on_step=False,
-            on_epoch=True,
-            batch_size=images.shape[0],
         )
         self.log(
             "val_precision",
@@ -385,6 +380,107 @@ class Net(pytorch_lightning.LightningModule):
             batch_size=images.shape[0],
         )
         return loss
+
+    def on_validation_epoch_end(self):
+        # Get the first batch of the validation data
+        val_loader = self.val_dataloader()
+        images, labels = (
+            next(iter(val_loader))["image"],
+            next(iter(val_loader))["label"],
+        )
+
+        # Move images and labels to device
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # Run the inference
+        outputs = self.forward(images)
+        predictions = torch.argmax(outputs, dim=1, keepdim=True)
+
+        # Convert the tensors to numpy arrays for saving with ITK
+        images_np = images.cpu().numpy()
+        predictions_np = predictions.cpu().numpy()
+
+        images_np = np.squeeze(images_np, axis=1)
+        predictions_np = np.squeeze(predictions_np, axis=1)
+
+        for i in range(min(5, images_np.shape[0])):
+            single_image = images_np[i, :, :, :]
+            single_prediction = predictions_np[i, :, :, :]
+            plt.figure(figsize=(10, 10))
+            plt.subplot(1, 2, 1)
+            middle_slice = single_image.shape[-1] // 2
+            plt.imshow(single_image[:, :, middle_slice], cmap="gray")
+            plt.title("Image")
+            plt.subplot(1, 2, 2)
+            plt.imshow(single_prediction[:, :, middle_slice], cmap="gray")
+            plt.title("Prediction")
+            self.logger.experiment.add_figure(
+                f"image_prediction_{i}", plt.gcf(), global_step=self.current_epoch
+            )
+            # TODO See if this works
+            # self.logger.experiment.add_figure(f"image_{i}", plt.imshow(single_image[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
+            # self.logger.experiment.add_figure(f"prediction_{i}", plt.imshow(single_prediction[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
+
+    def run_example_inference(self):
+        # Get the first batch of the validation data
+        val_loader = self.val_dataloader()
+        images, labels = (
+            next(iter(val_loader))["image"],
+            next(iter(val_loader))["label"],
+        )
+
+        # Move images and labels to device
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # Run the inference
+        outputs = self.forward(images)
+        predictions = torch.argmax(outputs, dim=1, keepdim=True)
+
+        # Calculate the dice score
+        dice = self.dice_metric(y_pred=predictions, y=labels)
+        print(f"Dice: {dice}")
+
+        # Convert the tensors to numpy arrays for saving with ITK
+        images_np = images.cpu().numpy()
+        labels_np = labels.cpu().numpy()
+        predictions_np = predictions.cpu().numpy()
+        print(f"Images_np shape: {images_np.shape}")
+        print(f"Labels_np shape: {labels_np.shape}")
+        print(f"Predictions_np shape: {predictions_np.shape}")
+
+        images_np = np.squeeze(images_np, axis=1)
+        labels_np = np.squeeze(labels_np, axis=1)
+        predictions_np = np.squeeze(predictions_np, axis=1)
+        print(f"Images_np shape: {images_np.shape}")
+        print(f"Labels_np shape: {labels_np.shape}")
+        print(f"Predictions_np shape: {predictions_np.shape}")
+        for i in range(np.shape(images_np)[0]):
+            single_image = images_np[i, :, :, :]
+            single_label = labels_np[i, :, :, :]
+            single_prediction = predictions_np[i, :, :, :]
+            plt.figure(figsize=(10, 10))
+            plt.subplot(1, 3, 1)
+            middle_slice = single_image.shape[-1] // 2
+            plt.imshow(single_image[:, :, middle_slice], cmap="gray")
+            plt.title("Image")
+            plt.subplot(1, 3, 2)
+            plt.imshow(single_label[:, :, middle_slice], cmap="gray")
+            plt.title("Label")
+            plt.subplot(1, 3, 3)
+            plt.imshow(single_prediction[:, :, middle_slice], cmap="gray")
+            plt.savefig(f"image_prediction_{i}.png")
+
+            itk.imwrite(itk.GetImageFromArray(single_image), f"image_{i}.nii.gz")
+            itk.imwrite(itk.GetImageFromArray(single_label), f"label_{i}.nii.gz")
+
+            itk.imwrite(
+                itk.GetImageFromArray(single_prediction.astype(np.uint8)),
+                f"prediction_{i}.nii.gz",
+            )
+
+        return images, labels, predictions
 
 
 class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
@@ -419,7 +515,7 @@ if __name__ == "__main__":
 
     # set up loggers and checkpoints
     # initialise the LightningModule
-    net = Net()
+    net = Net(is_testing=True)
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "logs"
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
@@ -436,13 +532,19 @@ if __name__ == "__main__":
         dirpath=log_dir.as_posix(),
         filename="checkpoint-{epoch:02d}-{val_dice:.2f}",
     )
+
+    #
+    # print(f"Images shape: {images.shape}")
+    # print(f"Labels shape: {labels.shape}")
+    # print(f"Predictions shape: {predictions.shape}")
+
     trainer = pytorch_lightning.Trainer(
-        max_epochs=10,
+        max_epochs=1,
         logger=tb_logger,
         # accelerator="gpu",
         enable_checkpointing=True,
         num_sanity_val_steps=1,
-        log_every_n_steps=5,
+        log_every_n_steps=1,
         profiler=profiler,
         callbacks=[
             BestModelCheckpoint(),
@@ -451,4 +553,7 @@ if __name__ == "__main__":
     )
 
     trainer.fit(net)
+    net = Net.load_from_checkpoint(checkpoint_callback.best_model_path)
+    net.run_example_inference()
+
     print("Finished training")
