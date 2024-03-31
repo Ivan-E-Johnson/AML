@@ -527,7 +527,7 @@ def create_blank_image(spacing, desired_size, origin, PIXEL_TYPE):
 def pre_process_images(base_data_path: Path):
     # Get the image and mask paths
     image_paths, mask_paths = init_data_lists(base_data_path)
-    output_data_path = base_data_path.parent / "preprocessed_data"
+    output_data_path = base_data_path.parent / "swinunetr_preprocessed_data"
     output_data_path.mkdir(exist_ok=True, parents=True)
 
     # Write the exploratory image info
@@ -552,8 +552,8 @@ def pre_process_images(base_data_path: Path):
         )
         assert np.unique(itk.GetArrayViewFromImage(resampled_mask)).size == 5
         resampled_output_path.parent.mkdir(exist_ok=True, parents=True)
-        # itk.imwrite(resampled_normalized_image, resampled_output_path)
-        # itk.imwrite(resampled_mask, resampled_mask_path)
+        itk.imwrite(resampled_normalized_image, resampled_output_path)
+        itk.imwrite(resampled_mask, resampled_mask_path)
         # TODO: Normalize the images to have a mean of 0 and a standard deviation of 1 for t2W
         df = df._append(
             {
@@ -582,7 +582,7 @@ def normalize_t2w_images(image: itk.Image):
 
 def resample_images_for_training(image: itk.Image, mask: itk.Image):
     x_y_size = 288  # Index
-    z_size = 16  # Index
+    z_size = 32  # Index
     x_y_fov = 140  # mm
     z_fov = 70  # mm
 
@@ -597,6 +597,10 @@ def resample_images_for_training(image: itk.Image, mask: itk.Image):
     # Get the new in plane spacing for the recentered image
     new_in_plane_spacing = x_y_fov / x_y_size
     new_out_of_plane_spacing = z_fov / z_size
+    print(
+        f"New In Plane Spacing: {new_in_plane_spacing}"
+        f"New Out of Plane Spacing: {new_out_of_plane_spacing}"
+    )
     new_spacing = [new_in_plane_spacing, new_in_plane_spacing, new_out_of_plane_spacing]
 
     center_of_mass_in_physical_space = mask.TransformContinuousIndexToPhysicalPoint(
@@ -654,7 +658,7 @@ if __name__ == "__main__":
     #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/SortedProstateData"
     # )
     base_data_path = Path(
-        "/home/iejohnson/programing/Supervised_learning/DATA/SortedProstateData"
+        "/home/ivan/School/AML/DATA/SortedProstateData"
     )
     # find_largest_needed_region_for_prostate(base_data_path)
     # compare_average_center_of_mass(base_data_path)

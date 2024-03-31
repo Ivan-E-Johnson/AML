@@ -15,10 +15,18 @@ from monai.transforms import (
     Spacingd,
     EnsureType,
     DataStats,
+    RandGaussianNoiseD,
+    RandHistogramShiftD,
+    RandRotated,
 )
-from monai.networks.nets import UNet
+from monai.networks.nets import UNet, SwinUNETR
 from monai.networks.layers import Norm
-from monai.metrics import DiceMetric, ConfusionMatrixMetric
+from monai.metrics import (
+    DiceMetric,
+    ConfusionMatrixMetric,
+    HausdorffDistanceMetric,
+    SurfaceDistanceMetric,
+)
 from monai.losses import DiceLoss, DiceCELoss
 from monai.inferers import sliding_window_inference
 from monai.data import CacheDataset, list_data_collate, decollate_batch, DataLoader
@@ -58,14 +66,24 @@ from monai.transforms import (
     RandCropByPosNegLabeld,
     ToTensord,
 )
+import einops
 from pytorch_lightning.cli import ReduceLROnPlateau
 from pytorch_lightning.profilers import SimpleProfiler
+
+from pytorch_lightning.tuner import Tuner
 from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
 from torch.utils.tensorboard._utils import make_grid
 
 print_config()
 from pathlib import Path
+
+
+BASE_DATA_PATH = Path(
+    "/home/ivan/School/AML/DATA/swinunetr_preprocessed_data"
+)
+
+RUN_NAME = "z32_basic_unet_3_29_24"
 
 
 # Function to initialize data lists
@@ -80,12 +98,9 @@ def init_data_lists():
     list: A list of image paths.
     list: A list of mask paths.
     """
-    base_data_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/preprocessed_data"
-    )
     mask_paths = []
     image_paths = []
-    for dir in base_data_path.iterdir():
+    for dir in BASE_DATA_PATH.iterdir():
         if dir.is_dir():
 
             image_paths.append(dir / f"{dir.name}_resampled_normalized_t2w.nii.gz")
@@ -94,7 +109,7 @@ def init_data_lists():
     return image_paths, mask_paths
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class AddChannelD(object):
@@ -125,7 +140,9 @@ class Net(pytorch_lightning.LightningModule):
     validation_step_outputs (list): The outputs of the validation step.
     """
 
-    def __init__(self, is_testing=False):
+
+    def __init__(self, batch_size: int, learning_rate,  is_testing=False,):
+
         super().__init__()
         self.number_of_classes = 5  # INCLUDES BACKGROUND
         self._model = UNet(
@@ -134,10 +151,16 @@ class Net(pytorch_lightning.LightningModule):
             out_channels=self.number_of_classes,
             channels=(16, 32, 64, 128, 256),  # Number of features in each layer
             strides=(2, 2, 2, 2),
-            num_res_units=2,
-            norm=Norm.BATCH,
+            num_res_units=3,
+            # norm=Norm.BATCH,
+            dropout=0.1,
+            # act="relu",
         )
         self.is_testing = is_testing
+
+        self.batch_size = batch_size
+        self.learning_rate = learning_rate
+
 
         self.loss_function = DiceCELoss(
             softmax=True, to_onehot_y=True, squared_pred=True
@@ -145,17 +168,6 @@ class Net(pytorch_lightning.LightningModule):
 
         # TODO implement this sensitivity metric
         # self.sensitivity_metric = ConfusionMatrixMetric(metric_name="sensitivity", compute_sample=True,)
-        self.post_pred = Compose(
-            [
-                EnsureType(),  # Ensure tensor type
-            ]
-        )
-
-        self.post_label = Compose(
-            [
-                EnsureType(),  # Ensure tensor type
-            ]
-        )
         # TODO ADD Other metrics
         self.dice_metric = DiceMetric(
             include_background=False,
@@ -163,9 +175,21 @@ class Net(pytorch_lightning.LightningModule):
             get_not_nans=False,
             num_classes=None,  # Infered from the data
         )
+        self.hausdorff_metric = HausdorffDistanceMetric(
+            include_background=False,
+            reduction="mean",
+            get_not_nans=False,
+        )
+        self.surface_distance_metric = SurfaceDistanceMetric(
+            include_background=False,
+            reduction="mean",
+            get_not_nans=False,
+        )
+
         self.best_val_dice = 0
         self.best_val_epoch = 0
         self.prepare_data()
+        self.save_hyperparameters()
 
     def forward(self, x):
         """
@@ -210,7 +234,7 @@ class Net(pytorch_lightning.LightningModule):
         # define the data transforms
         self.train_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"]),
+                LoadImaged(keys=["image", "label"], reader="ITKReader"),
                 EnsureChannelFirstD(
                     keys=["image", "label"]
                 ),  # Add channel to image and mask so
@@ -218,6 +242,15 @@ class Net(pytorch_lightning.LightningModule):
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=1),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=2),
+                RandRotated(
+                    keys=["image", "label"],
+                    range_x=15,
+                    range_y=15,
+                    range_z=15,
+                    prob=RandFlipd_prob,
+                ),
+                RandGaussianNoiseD(keys=["image"], prob=RandFlipd_prob / 2),
+                RandHistogramShiftD(keys=["image"], prob=RandFlipd_prob / 2),
                 ToTensord(keys=["image", "label"]),
                 # DataStatsD(keys=["image", "label"]),
             ]
@@ -237,14 +270,16 @@ class Net(pytorch_lightning.LightningModule):
         self.train_ds = CacheDataset(
             data=train_files,
             transform=self.train_transforms,
-            cache_rate=0.5,
+            cache_rate=0.8,
             num_workers=4,
+            runtime_cache=True,
         )
         self.val_ds = CacheDataset(
             data=val_files,
             transform=self.validation_transforms,
-            cache_rate=0.5,
+            cache_rate=0.8,
             num_workers=4,
+            runtime_cache=True,
         )
 
     def train_dataloader(self):
@@ -256,9 +291,9 @@ class Net(pytorch_lightning.LightningModule):
         """
         train_loader = DataLoader(
             self.train_ds,
-            batch_size=5,
+            batch_size=self.batch_size,
             shuffle=True,
-            num_workers=4,
+            num_workers=12,
             collate_fn=list_data_collate,
         )
         return train_loader
@@ -270,11 +305,13 @@ class Net(pytorch_lightning.LightningModule):
         Returns:
         DataLoader: The validation data loader.
         """
-        val_loader = DataLoader(self.val_ds, batch_size=1, num_workers=4)
+
+        val_loader = DataLoader(self.val_ds, batch_size=self.batch_size, num_workers=8)
         return val_loader
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+
         return optimizer
         # scheduler = ReduceLROnPlateau(
         #     optimizer,
@@ -302,11 +339,12 @@ class Net(pytorch_lightning.LightningModule):
         dict: The loss and the logs.
         """
         images, labels = batch["image"], batch["label"]
-        # print("Training Step")
-        # print(f"Images.Shape = {images.shape}")
-        print(f"Labels.Shape = {labels.shape}")
         output = self.forward(images)
-        print(f"Output shape {output.shape}")
+        if self.is_testing:
+            print("Training Step")
+            print(f"Images.Shape = {images.shape}")
+            print(f"Labels.Shape = {labels.shape}")
+            print(f"Output shape {output.shape}")
         loss = self.loss_function(output, labels)
         # Colapsing the output to a single channel
         predictions = torch.argmax(
@@ -317,24 +355,36 @@ class Net(pytorch_lightning.LightningModule):
         self.log(
             "train_dice",
             dice,
-            on_step=True,
+            on_step=False,
             on_epoch=True,
             reduce_fx=torch.mean,
+            sync_dist=True,
+            batch_size=self.batch_size,
         )
-        self.log("train_loss", loss, on_step=True, on_epoch=True, reduce_fx=torch.mean)
+        self.log(
+            "train_loss",
+            loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx=torch.mean,
+            sync_dist=True,
+            batch_size=self.batch_size,
+        )
+
         return loss
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch["image"], batch["label"]
-
+      
         outputs = self.forward(images)
         if self.is_testing:
             print("Validation Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
             print(f"Shape after post_pred: {outputs.shape}")
-
+        
         loss = self.loss_function(outputs, labels)
+
 
         # Calculate accuracy, precision, recall, and F1 score
         predictions = torch.argmax(
@@ -342,42 +392,50 @@ class Net(pytorch_lightning.LightningModule):
         )  # Assuming output is logits
 
         dice = self.dice_metric(y_pred=predictions, y=labels).mean()
+        haussdorf = self.hausdorff_metric(y_pred=predictions, y=labels).mean()
+        surface_distance = self.surface_distance_metric(y_pred=predictions, y=labels).mean()
 
         if self.is_testing:
             print(f"Predictions shape: {predictions.shape}")
             print(f"Dice: {dice}")
-        targets = labels  # Assuming labels are already one-hot encoded
-        precision = precision_score(
-            targets.flatten(), predictions.flatten(), average="weighted"
-        )
-        recall = recall_score(
-            targets.flatten(), predictions.flatten(), average="weighted"
-        )
+            print(f"Haussdorf: {haussdorf}")
+            print(f"Surface Distance: {surface_distance}")
 
+
+        self.log(
+            name="haussdorf_distance",
+            value=haussdorf,
+            on_step=False,
+            on_epoch=True,
+            batch_size=self.batch_size,
+            sync_dist=True,
+        )
+        self.log(
+            name="surface_distance",
+            value=surface_distance,
+            on_step=False,
+            on_epoch=True,
+            batch_size=self.batch_size,
+            sync_dist=True,
+        )
         # Log metrics
         self.log(
             "val_dice",
             dice,
             on_step=False,
             on_epoch=True,
-            batch_size=images.shape[0],
+
+            batch_size=self.batch_size,
+            sync_dist=True,
         )
         self.log(
-            "val_loss", loss, on_step=False, on_epoch=True, batch_size=images.shape[0]
-        )
-        self.log(
-            "val_precision",
-            precision,
+            "val_loss",
+            loss,
             on_step=False,
             on_epoch=True,
-            batch_size=images.shape[0],
-        )
-        self.log(
-            "val_recall",
-            recall,
-            on_step=False,
-            on_epoch=True,
-            batch_size=images.shape[0],
+            batch_size=self.batch_size,
+            sync_dist=True,
+
         )
         return loss
 
@@ -393,34 +451,50 @@ class Net(pytorch_lightning.LightningModule):
         images = images.to(device)
         labels = labels.to(device)
 
+        torch.no_grad()
+
         # Run the inference
         outputs = self.forward(images)
         predictions = torch.argmax(outputs, dim=1, keepdim=True)
 
         # Convert the tensors to numpy arrays for saving with ITK
         images_np = images.cpu().numpy()
+
+        labels_np = labels.cpu().numpy()
+
         predictions_np = predictions.cpu().numpy()
 
         images_np = np.squeeze(images_np, axis=1)
         predictions_np = np.squeeze(predictions_np, axis=1)
-
-        for i in range(min(5, images_np.shape[0])):
+        labels_np = np.squeeze(labels_np, axis=1)
+        for i in range(min(3, images_np.shape[0])):
             single_image = images_np[i, :, :, :]
+            single_label = labels_np[i, :, :, :]
             single_prediction = predictions_np[i, :, :, :]
             plt.figure(figsize=(10, 10))
-            plt.subplot(1, 2, 1)
+            plt.subplot(1, 3, 1)
             middle_slice = single_image.shape[-1] // 2
             plt.imshow(single_image[:, :, middle_slice], cmap="gray")
             plt.title("Image")
-            plt.subplot(1, 2, 2)
-            plt.imshow(single_prediction[:, :, middle_slice], cmap="gray")
+            plt.subplot(1, 3, 2)
+            plt.imshow(single_prediction[:, :, middle_slice])
             plt.title("Prediction")
+            plt.subplot(1, 3, 3)
+            plt.imshow(single_label[:, :, middle_slice])
+            plt.title("Label")
+            # TODO Add legend so differentiate the classes
+
             self.logger.experiment.add_figure(
                 f"image_prediction_{i}", plt.gcf(), global_step=self.current_epoch
             )
             # TODO See if this works
             # self.logger.experiment.add_figure(f"image_{i}", plt.imshow(single_image[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
-            # self.logger.experiment.add_figure(f"prediction_{i}", plt.imshow(single_prediction[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
+            fig = plt.figure(figsize=(10, 10))
+            plt.imshow(single_prediction[:, :, middle_slice])
+            self.logger.experiment.add_figure(
+                f"prediction_{i}", fig, global_step=self.current_epoch
+            )
+
 
     def run_example_inference(self):
         # Get the first batch of the validation data
@@ -469,7 +543,8 @@ class Net(pytorch_lightning.LightningModule):
             plt.imshow(single_label[:, :, middle_slice], cmap="gray")
             plt.title("Label")
             plt.subplot(1, 3, 3)
-            plt.imshow(single_prediction[:, :, middle_slice], cmap="gray")
+            plt.imshow(single_prediction[:, :, middle_slice])
+
             plt.savefig(f"image_prediction_{i}.png")
 
             itk.imwrite(itk.GetImageFromArray(single_image), f"image_{i}.nii.gz")
@@ -502,7 +577,7 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
                         trainer.checkpoint_callback
                     )  # Access checkpoint callback from trainer
                     checkpoint_callback.best_model_path = os.path.join(
-                        checkpoint_callback.dirpath, "best_model.pth"
+                        checkpoint_callback.dirpath, f"{RUN_NAME}_best_model.pth"
                     )
                     trainer.save_checkpoint(checkpoint_callback.best_model_path)
 
@@ -515,14 +590,15 @@ if __name__ == "__main__":
 
     # set up loggers and checkpoints
     # initialise the LightningModule
-    net = Net(is_testing=True)
+
+    net = Net(learning_rate=1e-3,batch_size= 5, is_testing=False)
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "logs"
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
-        save_dir=log_dir.as_posix(), name="3_26_24_lightning_logs"
-    )
+        save_dir=log_dir.as_posix(), name="3_29_24_lightning_logs")
     os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    checkpoint_fn = RUN_NAME + "checkpoint-{epoch:02d}-{val_dice:.2f}"
     # initialise Lightning's trainer.
     profiler = SimpleProfiler()
     checkpoint_callback = ModelCheckpoint(
@@ -530,7 +606,7 @@ if __name__ == "__main__":
         mode="max",
         save_last=True,
         dirpath=log_dir.as_posix(),
-        filename="checkpoint-{epoch:02d}-{val_dice:.2f}",
+        filename=checkpoint_fn,
     )
 
     #
@@ -539,13 +615,14 @@ if __name__ == "__main__":
     # print(f"Predictions shape: {predictions.shape}")
 
     trainer = pytorch_lightning.Trainer(
-        max_epochs=1,
+        max_epochs=1000,
         logger=tb_logger,
-        # accelerator="gpu",
+        accelerator="gpu",
+        devices=[0],
         enable_checkpointing=True,
         num_sanity_val_steps=1,
-        log_every_n_steps=1,
-        profiler=profiler,
+        log_every_n_steps=5,
+        # profiler=profiler,
         callbacks=[
             BestModelCheckpoint(),
             checkpoint_callback,
@@ -553,7 +630,6 @@ if __name__ == "__main__":
     )
 
     trainer.fit(net)
-    net = Net.load_from_checkpoint(checkpoint_callback.best_model_path)
-    net.run_example_inference()
+
 
     print("Finished training")
