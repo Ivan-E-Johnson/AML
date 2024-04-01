@@ -78,10 +78,20 @@ from torch.utils.tensorboard._utils import make_grid
 print_config()
 from pathlib import Path
 
+#weights obtained from running weight_labels() in itk_preprocessing.py
+label_weights={'Background': 94.66189125389738, 'Peripheral Zone': 1.6434384300595233, 'Transition Zone': 3.4090448842297345, 'Distal Prostatic Urethra': 0.26201520647321425, 'Fibromuscular Stroma': 0.023610225340136057}
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
+
+
 
 BASE_DATA_PATH = Path(
     "/home/ivan/School/AML/DATA/swinunetr_preprocessed_data"
 )
+BASE_DATA_PATH = Path(os.environ.get("SWINUNETR_DATA_PATH"))
 
 RUN_NAME = "z32_basic_unet_3_29_24"
 
@@ -98,6 +108,11 @@ def init_data_lists():
     list: A list of image paths.
     list: A list of mask paths.
     """
+    base_data_path = Path(os.environ.get("DATA_PATH"))
+    print(f"Base data path: {base_data_path}")
+    # base_data_path = Path(
+    #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/preprocessed_data"
+    # )
     mask_paths = []
     image_paths = []
     for dir in BASE_DATA_PATH.iterdir():
@@ -375,14 +390,14 @@ class Net(pytorch_lightning.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         images, labels = batch["image"], batch["label"]
-      
+
         outputs = self.forward(images)
         if self.is_testing:
             print("Validation Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
             print(f"Shape after post_pred: {outputs.shape}")
-        
+
         loss = self.loss_function(outputs, labels)
 
 

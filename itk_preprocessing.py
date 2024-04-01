@@ -1,15 +1,22 @@
+import os
 import random
+from collections import defaultdict
 
 import itk
 from pathlib import Path
 
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap
 
 from data_connector import get_exploratory_image_info, get_image_stats
 import pandas as pd
 import itertools
+import nibabel as nib
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 def show_subject_images(image: itk.Image, mask: itk.Image):
     # Convert the images to numpy arrays
@@ -36,7 +43,7 @@ def init_data_lists(base_data_path):
 
 
 def get_mask_bounding_box(
-    mask: itk.Image, label: int
+        mask: itk.Image, label: int
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     # Initialize the LabelStatisticsImageFilter
     stats_filter = itk.LabelStatisticsImageFilter.New(Input=mask, LabelInput=mask)
@@ -190,7 +197,7 @@ def simple_otsu_thresholding(image: itk.Image) -> itk.Image:
 
 
 def multi_otsu_thresholding(
-    image: itk.Image, number_of_thresholds: int, number_of_histogram_bins: int
+        image: itk.Image, number_of_thresholds: int, number_of_histogram_bins: int
 ) -> itk.Image:
     # Initialize the OtsuThresholdImageFilter
     uc_image = rescale_and_cast_to_unsigned_char(image)
@@ -203,17 +210,17 @@ def multi_otsu_thresholding(
 
 
 def calculate_distance_between_points(
-    point1: tuple[int, int, int], point2: tuple[int, int, int]
+        point1: tuple[int, int, int], point2: tuple[int, int, int]
 ) -> float:
     x_distance = point1[0] - point2[0]
     y_distance = point1[1] - point2[1]
     z_distance = point1[2] - point2[2]
-    distance = (x_distance**2 + y_distance**2 + z_distance**2) ** 0.5
+    distance = (x_distance ** 2 + y_distance ** 2 + z_distance ** 2) ** 0.5
     return distance
 
 
 def plot_dict_images(
-    threshold_dict: dict, center_dict: dict, true_center: tuple[int, int, int]
+        threshold_dict: dict, center_dict: dict, true_center: tuple[int, int, int]
 ):
     SAVE_IMAGES = False
 
@@ -252,7 +259,6 @@ def find_closest_center(true_center: tuple[int, int, int], center_dict: dict):
 
 
 def compare_average_center_of_mass(base_data_path):
-
     output_data_path = Path("heck_Centers")
     output_data_path.mkdir(exist_ok=True, parents=True)
 
@@ -297,7 +303,7 @@ def compare_average_center_of_mass(base_data_path):
 
         # Multi Otsu thresholding
         for threshold, histogram in itertools.product(
-            thresholding_list, histogram_list
+                thresholding_list, histogram_list
         ):
             if threshold >= histogram:
                 continue
@@ -318,23 +324,23 @@ def compare_average_center_of_mass(base_data_path):
 
 
 def calculate_new_origin_from_center_of_mass(
-    center_of_mass_in_phsyical_space: tuple[float, float, float], spacing, size
+        center_of_mass_in_phsyical_space: tuple[float, float, float], spacing, size
 ):
     return (
-        np.array(center_of_mass_in_phsyical_space)
-        - (
-            np.array([(size[0] / 2 - 1), (size[1] / 2 - 1), (size[2] / 2 - 1)])
-            * np.array(spacing)
-        ).tolist()
+            np.array(center_of_mass_in_phsyical_space)
+            - (
+                    np.array([(size[0] / 2 - 1), (size[1] / 2 - 1), (size[2] / 2 - 1)])
+                    * np.array(spacing)
+            ).tolist()
     )
 
 
 def get_recentered_image_from_center_of_mass(
-    mask: itk.Image,
-    center_of_mass: tuple[int, int, int],
-    x_extent: int,
-    y_extent: int,
-    z_extent: int,
+        mask: itk.Image,
+        center_of_mass: tuple[int, int, int],
+        x_extent: int,
+        y_extent: int,
+        z_extent: int,
 ):
     PIXEL_TYPE = itk.UC
     IMAGE_TYPE = itk.Image[PIXEL_TYPE, 3]
@@ -500,7 +506,6 @@ def find_largest_needed_region_for_prostate(base_data_path: Path):
 
 
 def create_blank_image(spacing, desired_size, origin, PIXEL_TYPE):
-
     IMAGE_TYPE = itk.Image[PIXEL_TYPE, 3]
     # Get the region from the bounding box
     region = itk.ImageRegion[3]()
@@ -527,7 +532,7 @@ def create_blank_image(spacing, desired_size, origin, PIXEL_TYPE):
 def pre_process_images(base_data_path: Path):
     # Get the image and mask paths
     image_paths, mask_paths = init_data_lists(base_data_path)
-    output_data_path = base_data_path.parent / "swinunetr_preprocessed_data"
+    output_data_path = base_data_path.parent / "preprocessed_data"
     output_data_path.mkdir(exist_ok=True, parents=True)
 
     # Write the exploratory image info
@@ -541,19 +546,19 @@ def pre_process_images(base_data_path: Path):
         resampled_image, resampled_mask = resample_images_for_training(image, mask)
         resampled_normalized_image = normalize_t2w_images(resampled_image)
         resampled_output_path = (
-            output_data_path
-            / subject_name
-            / f"{subject_name}_resampled_normalized_t2w.nii.gz"
+                output_data_path
+                / subject_name
+                / f"{subject_name}_resampled_normalized_t2w.nii.gz"
         )
         resampled_mask_path = (
-            output_data_path
-            / subject_name
-            / f"{subject_name}_resampled_segmentations.nii.gz"
+                output_data_path
+                / subject_name
+                / f"{subject_name}_resampled_segmentations.nii.gz"
         )
         assert np.unique(itk.GetArrayViewFromImage(resampled_mask)).size == 5
         resampled_output_path.parent.mkdir(exist_ok=True, parents=True)
-        itk.imwrite(resampled_normalized_image, resampled_output_path)
-        itk.imwrite(resampled_mask, resampled_mask_path)
+        # itk.imwrite(resampled_normalized_image, resampled_output_path)
+        # itk.imwrite(resampled_mask, resampled_mask_path)
         # TODO: Normalize the images to have a mean of 0 and a standard deviation of 1 for t2W
         df = df._append(
             {
@@ -582,7 +587,7 @@ def normalize_t2w_images(image: itk.Image):
 
 def resample_images_for_training(image: itk.Image, mask: itk.Image):
     x_y_size = 288  # Index
-    z_size = 32  # Index
+    z_size = 16  # Index
     x_y_fov = 140  # mm
     z_fov = 70  # mm
 
@@ -597,10 +602,6 @@ def resample_images_for_training(image: itk.Image, mask: itk.Image):
     # Get the new in plane spacing for the recentered image
     new_in_plane_spacing = x_y_fov / x_y_size
     new_out_of_plane_spacing = z_fov / z_size
-    print(
-        f"New In Plane Spacing: {new_in_plane_spacing}"
-        f"New Out of Plane Spacing: {new_out_of_plane_spacing}"
-    )
     new_spacing = [new_in_plane_spacing, new_in_plane_spacing, new_out_of_plane_spacing]
 
     center_of_mass_in_physical_space = mask.TransformContinuousIndexToPhysicalPoint(
@@ -653,14 +654,138 @@ def resample_images_for_training(image: itk.Image, mask: itk.Image):
     return resampled_image, resampled_mask
 
 
+def get_label_percentage(image_path, label_path):
+    # Paths to your image and label files
+    # image_path = "/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_prostate.nii.gz"
+    #
+    # # Load NIfTI segmentation label
+    # label_path = ("/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_segmentation"
+    #               ".nii.gz")
+
+
+    # Load image and label data
+    image_data = nib.load(image_path).get_fdata()
+    label_data = nib.load(label_path).get_fdata()
+    weight_dict = {}
+    # Define custom colormap for segmentation labels
+    # Map the label values to colors
+    label_colors = ListedColormap([
+        'black',  # Background (0)
+        'red',  # Peripheral Zone (1)
+        'green',  # Transition Zone (2)
+        'blue',  # Fibromuscular Stroma (3)
+        'yellow',  # Distal Prostatic Urethra (4)
+    ])
+
+    # Label names mapped to their respective numbers
+    label_names = {
+        0: 'Background',
+        1: 'Peripheral Zone',
+        2: 'Transition Zone',
+        3: 'Fibromuscular Stroma',
+        4: 'Distal Prostatic Urethra'
+    }
+
+    # Calculate the total number of pixels per slice (for 2D image slice)
+    total_pixels_per_slice = label_data.shape[0] * label_data.shape[1]
+
+    # Calculate the percentage of each label
+    unique, counts = np.unique(label_data[:, :, image_data.shape[2] // 2], return_counts=True)
+    label_percentages = {label_names[label]: (count / total_pixels_per_slice) * 100 for label, count in
+                         zip(unique, counts)}
+
+    # Print out the percentages with label names
+    print("Percentage of each label in the central slice:")
+    for label_name, percentage in label_percentages.items():
+        print(f"{label_name}: {percentage:.2f}%")
+        weight_dict[label_name] = percentage
+    return weight_dict
+def weight_labels(data_path):
+
+    image_path: str =""
+    label_path: str =""
+    weights = defaultdict(lambda : 0.0)
+    subject_count = 0
+    for filename in os.listdir(data_path):
+        subject = os.path.join(data_path, filename)
+        #check if is directory
+        if os.path.isdir(subject):
+            for file in os.listdir(subject):
+                if file.endswith("segmentation.nii.gz"):
+                    #grab label info
+                    label_path = os.path.join(subject, file)
+                if file.endswith("prostate.nii.gz"):
+                    #grab image info
+                    image_path = os.path.join(subject, file)
+            subject_weights = get_label_percentage(image_path,label_path)
+            subject_count += 1
+            for key in subject_weights.keys():
+                weights[key] += subject_weights[key]
+    for key in weights.keys():
+        weights[key] = weights[key]/subject_count
+    print(weights)
+
+
+def visualize_labels():
+    # Load NIfTI image
+    image_path = "/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_prostate.nii.gz"
+
+    # Load NIfTI segmentation label
+    label_path = ("/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_segmentation"
+                  ".nii.gz")
+
+    # Load image and label data
+    image_data = nib.load(image_path).get_fdata()
+    label_data = nib.load(label_path).get_fdata()
+
+    # Define custom colormap for segmentation labels
+    # Map the label values to colors
+    label_colors = ListedColormap([
+        'black',  # Background (0)
+        'red',  # Peripheral Zone (1)
+        'green',  # Transition Zone (2)
+        'blue',  # Fibromuscular Stroma (3)
+        'yellow',  # Distal Prostatic Urethra (4)
+    ])
+
+    # The names of the labels
+    label_names = [
+        'Background',
+        'Peripheral Zone',
+        'Transition Zone',
+        'Fibromuscular Stroma',
+        'Distal Prostatic Urethra'
+    ]
+
+    # Display NIfTI image
+    slice_index = image_data.shape[2] // 2  # Index for the central slice
+    plt.figure(figsize=(8, 8))
+    plt.imshow(image_data[:, :, slice_index], cmap='gray')
+    plt.imshow(label_data[:, :, slice_index], cmap=label_colors, alpha=0.5)  # Overlay labels on central slice
+    plt.title('Segmentation Labels Overlay')
+    plt.axis('off')
+
+    # Create a colorbar with label names
+    colorbar = plt.colorbar(ticks=range(len(label_names)))
+    colorbar.set_ticklabels(label_names)
+
+    # Adjust colorbar height to match the figure
+    ax = plt.gca()
+    image_aspect = image_data.shape[0] / image_data.shape[1]
+    colorbar.ax.set_aspect(20.0 * image_aspect)
+
+    plt.show()
+
+
 if __name__ == "__main__":
     # base_data_path = Path(
     #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/SortedProstateData"
     # )
     base_data_path = Path(
-        "/home/ivan/School/AML/DATA/SortedProstateData"
+        os.environ.get("SortedProstateData")
     )
     # find_largest_needed_region_for_prostate(base_data_path)
     # compare_average_center_of_mass(base_data_path)
     pre_process_images(base_data_path)
     print("Finshed")
+    weight_labels(base_data_path)
