@@ -66,8 +66,8 @@ from monai.transforms import (
     RandCropByPosNegLabeld,
     ToTensord,
 )
-import einops
 import torchmetrics
+
 from pytorch_lightning.cli import ReduceLROnPlateau
 from pytorch_lightning.profilers import SimpleProfiler
 from pytorch_lightning.tuner import Tuner
@@ -78,22 +78,26 @@ from torch.utils.tensorboard._utils import make_grid
 print_config()
 from pathlib import Path
 
-#weights obtained from running weight_labels() in itk_preprocessing.py
-label_weights={'Background': 94.66189125389738, 'Peripheral Zone': 1.6434384300595233, 'Transition Zone': 3.4090448842297345, 'Distal Prostatic Urethra': 0.26201520647321425, 'Fibromuscular Stroma': 0.023610225340136057}
+# weights obtained from running weight_labels() in itk_preprocessing.py
+label_weights = {
+    "Background": 94.66189125389738,
+    "Peripheral Zone": 1.6434384300595233,
+    "Transition Zone": 3.4090448842297345,
+    "Distal Prostatic Urethra": 0.26201520647321425,
+    "Fibromuscular Stroma": 0.023610225340136057,
+}
 from dotenv import load_dotenv
 import os
 
 # Load environment variables from .env file
 load_dotenv()
 
-
-
-BASE_DATA_PATH = Path(
-    "/home/ivan/School/AML/DATA/swinunetr_preprocessed_data"
-)
-BASE_DATA_PATH = Path(os.environ.get("SWINUNETR_DATA_PATH"))
-
 RUN_NAME = "z32_basic_unet_3_29_24"
+
+
+def convert_to_bi_name(name: str):
+    study_num = name.split("-")[1]
+    return f"PRX{study_num}"
 
 
 BASE_DATA_PATH = Path(
@@ -122,16 +126,21 @@ def init_data_lists():
     # )
     mask_paths = []
     image_paths = []
-    for dir in BASE_DATA_PATH.iterdir():
+    for dir in base_data_path.iterdir():
         if dir.is_dir():
+            image_list = []
 
-            image_paths.append(dir / f"{dir.name}_resampled_normalized_t2w.nii.gz")
+            image_list.append(dir / f"{dir.name}_resampled_normalized_t2w.nii.gz")
             mask_paths.append(dir / f"{dir.name}_resampled_segmentations.nii.gz")
 
+            adc_path = list(dir.glob("*ADC.nii_registered.nii.gz"))[0]
+            bvalue_path = list(dir.glob("*bVal.nii_registered.nii.gz"))[0]
+            image_list.append(adc_path)
+
+            image_list.append(bvalue_path)
+
+            image_paths.append(image_list)
     return image_paths, mask_paths
-
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class AddChannelD(object):
@@ -144,6 +153,33 @@ class AddChannelD(object):
             im = d[key]
             im = np.expand_dims(im, axis=0)
             d[key] = im
+        return d
+
+
+class ModalityStackTransform:
+    """
+    A custom transformation to stack different modalities into a single multi-channel image.
+    Assumes modalities are stored in separate files with a consistent naming scheme.
+    """
+
+    def __init__(self, keys):
+        self.keys = keys
+
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            # Assuming the key is a list of paths
+            # Assuming 'data' is a dictionary with keys 'image' and 'label'
+            # And 'image' is a list of paths: [path_to_t1, path_to_t2, path_to_adc]
+            images = [itk.imread(path) for path in d[key]]
+            arrays = [itk.array_from_image(image) for image in images]
+            stacked_image = np.stack(
+                arrays, axis=0
+            )  # Stack along the channel dimension
+            d["image"] = stacked_image
+            print(f"Stacked image shape: {stacked_image.shape}")
+            print(f"Stacked image dtype: {stacked_image.dtype}")
+
         return d
 
 
@@ -161,6 +197,7 @@ class Net(pytorch_lightning.LightningModule):
     best_val_epoch (int): The epoch with the best validation dice score.
     validation_step_outputs (list): The outputs of the validation step.
     """
+
 
     # TEST OUT
     # Shallow Progression (16, 24, 48, 96, 192)
@@ -180,27 +217,23 @@ class Net(pytorch_lightning.LightningModule):
         kernel_size: int = 3,
         kernel_upsample: int = 3,
         is_testing=False,
+
     ):
 
         super().__init__()
         self.number_of_classes = 5  # INCLUDES BACKGROUND
-        self.number_res_units = number_res_units
-        self.dropout = dropout
-        self.norm = norm
-        self.kernel_size = kernel_size
-        self.kernel_upsample = kernel_upsample
 
         self._model = UNet(
             spatial_dims=3,
-            in_channels=1,
+            in_channels=3,
             out_channels=self.number_of_classes,
             channels=(16, 32, 64, 128, 256),  # Number of features in each layer
             strides=(2, 2, 2, 2),
-            num_res_units=self.number_res_units,
-            norm=self.norm,
-            kernel_size=self.kernel_size,
-            up_kernel_size=self.kernel_upsample,
-            dropout=self.dropout,
+            num_res_units=number_res_units,
+            norm=norm,
+            kernel_size=kernel_size,
+            up_kernel_size=kernel_upsample,
+            dropout=dropout,
             # act="relu",
         )
         self.is_testing = is_testing
@@ -286,9 +319,10 @@ class Net(pytorch_lightning.LightningModule):
         # define the data transforms
         self.train_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"], reader="ITKReader"),
+                ModalityStackTransform(keys=["image"]),
+                LoadImaged(keys=["label"]),
                 EnsureChannelFirstD(
-                    keys=["image", "label"]
+                    keys=["image", "label"], channel_dim=0
                 ),  # Add channel to image and mask so
                 # Coarse Segmentation combine all mask
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
@@ -309,9 +343,10 @@ class Net(pytorch_lightning.LightningModule):
         )
         self.validation_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"]),
+                ModalityStackTransform(keys=["image"]),
+                LoadImaged(keys=["label"]),
                 EnsureChannelFirstD(
-                    keys=["image", "label"]
+                    keys=["image", "label"], channel_dim=0
                 ),  # Add channel to image and mask so
                 ToTensord(keys=["image", "label"]),
                 # DataStatsD(keys=["image", "label"]),
@@ -390,6 +425,7 @@ class Net(pytorch_lightning.LightningModule):
         Returns:
         dict: The loss and the logs.
         """
+        torch.set_grad_enabled(True)
         images, labels = batch["image"], batch["label"]
         output = self.forward(images)
         if self.is_testing:
@@ -438,7 +474,6 @@ class Net(pytorch_lightning.LightningModule):
         loss = self.loss_function(outputs, labels)
         # Run these metrics before the squashing of the output
 
-
         # Calculate accuracy, precision, recall, and F1 score
         predictions = torch.argmax(
             outputs, dim=1, keepdim=True
@@ -449,7 +484,9 @@ class Net(pytorch_lightning.LightningModule):
         surface_distance = self.surface_distance_metric(
             y_pred=predictions, y=labels
         ).mean()
+
         iou = self.iou_metric(predictions, labels)
+
 
         if self.is_testing:
             print(f"Predictions shape: {predictions.shape}")
@@ -457,10 +494,11 @@ class Net(pytorch_lightning.LightningModule):
             print(f"Haussdorf: {haussdorf}")
             print(f"Surface Distance: {surface_distance}")
 
+
         if self.best_val_dice < dice:
             self.best_val_dice = dice
             self.best_val_epoch = self.current_epoch
-
+            
         self.log(
             name="iou",
             value=iou,
@@ -513,8 +551,8 @@ class Net(pytorch_lightning.LightningModule):
         )
 
         # Move images and labels to device
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(self.device)
+        labels = labels.to(self.device)
 
         torch.no_grad()
 
@@ -568,8 +606,8 @@ class Net(pytorch_lightning.LightningModule):
         )
 
         # Move images and labels to device
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(self.device)
+        labels = labels.to(self.device)
 
         # Run the inference
         outputs = self.forward(images)
@@ -645,6 +683,7 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
                     trainer.save_checkpoint(checkpoint_callback.best_model_path)
 
 
+
 def do_main(
     learning_rate,
     batch_size,
@@ -690,9 +729,10 @@ def do_main(
     )
     trainer = pytorch_lightning.Trainer(
         max_epochs=epocs,
+
         logger=tb_logger,
-        accelerator="gpu",
-        devices=[0],
+        accelerator="cpu",
+        # devices=[0],
         enable_checkpointing=True,
         num_sanity_val_steps=1,
         log_every_n_steps=5,
@@ -807,22 +847,6 @@ if __name__ == "__main__":
     print(f"Device: {device}")
     print(f"Cuda available: {torch.cuda.is_available()}")
     print("*" * 80)
-
-    # set up loggers and checkpoints
-    # initialise the LightningModule
-
-    os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-
-    # do_main(
-    #     learning_rate=0.0001,
-    #     batch_size=1,
-    #     dropout=0.1,
-    #     number_res_units=3,
-    #     kernel_size=3,
-    #     kernel_upsample=3,
-    #     epocs=1000,
-    #     log_name=RUN_NAME,
-    # )
     do_baysian_optimization(number_of_iterations=100, number_of_points_to_probe=100)
+
     print("Finished training")
