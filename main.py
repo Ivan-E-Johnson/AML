@@ -67,9 +67,9 @@ from monai.transforms import (
     ToTensord,
 )
 import einops
+import torchmetrics
 from pytorch_lightning.cli import ReduceLROnPlateau
 from pytorch_lightning.profilers import SimpleProfiler
-
 from pytorch_lightning.tuner import Tuner
 from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
@@ -94,6 +94,13 @@ BASE_DATA_PATH = Path(
 BASE_DATA_PATH = Path(os.environ.get("SWINUNETR_DATA_PATH"))
 
 RUN_NAME = "z32_basic_unet_3_29_24"
+
+
+BASE_DATA_PATH = Path(
+    "/home/iejohnson/programing/Supervised_learning/DATA/preprocessed_data"
+)
+
+RUN_NAME = "Baysian_Opt_z16_basic_unet_3_30_24"
 
 
 # Function to initialize data lists
@@ -155,20 +162,45 @@ class Net(pytorch_lightning.LightningModule):
     validation_step_outputs (list): The outputs of the validation step.
     """
 
+    # TEST OUT
+    # Shallow Progression (16, 24, 48, 96, 192)
+    # Default Progression (16, 32, 64, 128, 256)
+    # Deep Progression (32, 64, 128, 256, 512)
 
-    def __init__(self, batch_size: int, learning_rate,  is_testing=False,):
+    # More aggressive early downsampling: (4, 2, 2, 2)
+    # Default downsampling: (2, 2, 2, 2)
+    # More gradual downsampling: (2, 2, 1, 1)
+    def __init__(
+        self,
+        batch_size: int,
+        learning_rate: float,
+        dropout: float,
+        norm: Norm,
+        number_res_units: int,
+        kernel_size: int = 3,
+        kernel_upsample: int = 3,
+        is_testing=False,
+    ):
 
         super().__init__()
         self.number_of_classes = 5  # INCLUDES BACKGROUND
+        self.number_res_units = number_res_units
+        self.dropout = dropout
+        self.norm = norm
+        self.kernel_size = kernel_size
+        self.kernel_upsample = kernel_upsample
+
         self._model = UNet(
             spatial_dims=3,
             in_channels=1,
             out_channels=self.number_of_classes,
             channels=(16, 32, 64, 128, 256),  # Number of features in each layer
             strides=(2, 2, 2, 2),
-            num_res_units=3,
-            # norm=Norm.BATCH,
-            dropout=0.1,
+            num_res_units=self.number_res_units,
+            norm=self.norm,
+            kernel_size=self.kernel_size,
+            up_kernel_size=self.kernel_upsample,
+            dropout=self.dropout,
             # act="relu",
         )
         self.is_testing = is_testing
@@ -176,10 +208,9 @@ class Net(pytorch_lightning.LightningModule):
         self.batch_size = batch_size
         self.learning_rate = learning_rate
 
-
         self.loss_function = DiceCELoss(
             softmax=True, to_onehot_y=True, squared_pred=True
-        )  # TODO Implement secondary loss functions
+        )
 
         # TODO implement this sensitivity metric
         # self.sensitivity_metric = ConfusionMatrixMetric(metric_name="sensitivity", compute_sample=True,)
@@ -199,6 +230,12 @@ class Net(pytorch_lightning.LightningModule):
             include_background=False,
             reduction="mean",
             get_not_nans=False,
+        )
+        self.iou_metric = torchmetrics.JaccardIndex(
+            task="multiclass",
+            threshold=0.5,
+            num_classes=self.number_of_classes,
+            average="macro",
         )
 
         self.best_val_dice = 0
@@ -399,6 +436,7 @@ class Net(pytorch_lightning.LightningModule):
             print(f"Shape after post_pred: {outputs.shape}")
 
         loss = self.loss_function(outputs, labels)
+        # Run these metrics before the squashing of the output
 
 
         # Calculate accuracy, precision, recall, and F1 score
@@ -408,7 +446,10 @@ class Net(pytorch_lightning.LightningModule):
 
         dice = self.dice_metric(y_pred=predictions, y=labels).mean()
         haussdorf = self.hausdorff_metric(y_pred=predictions, y=labels).mean()
-        surface_distance = self.surface_distance_metric(y_pred=predictions, y=labels).mean()
+        surface_distance = self.surface_distance_metric(
+            y_pred=predictions, y=labels
+        ).mean()
+        iou = self.iou_metric(predictions, labels)
 
         if self.is_testing:
             print(f"Predictions shape: {predictions.shape}")
@@ -416,7 +457,18 @@ class Net(pytorch_lightning.LightningModule):
             print(f"Haussdorf: {haussdorf}")
             print(f"Surface Distance: {surface_distance}")
 
+        if self.best_val_dice < dice:
+            self.best_val_dice = dice
+            self.best_val_epoch = self.current_epoch
 
+        self.log(
+            name="iou",
+            value=iou,
+            on_step=False,
+            on_epoch=True,
+            batch_size=self.batch_size,
+            sync_dist=True,
+        )
         self.log(
             name="haussdorf_distance",
             value=haussdorf,
@@ -439,7 +491,6 @@ class Net(pytorch_lightning.LightningModule):
             dice,
             on_step=False,
             on_epoch=True,
-
             batch_size=self.batch_size,
             sync_dist=True,
         )
@@ -450,7 +501,6 @@ class Net(pytorch_lightning.LightningModule):
             on_epoch=True,
             batch_size=self.batch_size,
             sync_dist=True,
-
         )
         return loss
 
@@ -482,34 +532,32 @@ class Net(pytorch_lightning.LightningModule):
         images_np = np.squeeze(images_np, axis=1)
         predictions_np = np.squeeze(predictions_np, axis=1)
         labels_np = np.squeeze(labels_np, axis=1)
-        for i in range(min(3, images_np.shape[0])):
-            single_image = images_np[i, :, :, :]
-            single_label = labels_np[i, :, :, :]
-            single_prediction = predictions_np[i, :, :, :]
-            plt.figure(figsize=(10, 10))
-            plt.subplot(1, 3, 1)
-            middle_slice = single_image.shape[-1] // 2
-            plt.imshow(single_image[:, :, middle_slice], cmap="gray")
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(single_prediction[:, :, middle_slice])
-            plt.title("Prediction")
-            plt.subplot(1, 3, 3)
-            plt.imshow(single_label[:, :, middle_slice])
-            plt.title("Label")
-            # TODO Add legend so differentiate the classes
+        single_image = images_np[0, :, :, :]
+        single_label = labels_np[0, :, :, :]
+        single_prediction = predictions_np[0, :, :, :]
+        plt.figure(figsize=(10, 10))
+        plt.subplot(1, 3, 1)
+        middle_slice = single_image.shape[-1] // 2
+        plt.imshow(single_image[:, :, middle_slice], cmap="gray")
+        plt.title("Image")
+        plt.subplot(1, 3, 2)
+        plt.imshow(single_prediction[:, :, middle_slice])
+        plt.title("Prediction")
+        plt.subplot(1, 3, 3)
+        plt.imshow(single_label[:, :, middle_slice])
+        plt.title("Label")
+        # TODO Add legend so differentiate the classes
 
-            self.logger.experiment.add_figure(
-                f"image_prediction_{i}", plt.gcf(), global_step=self.current_epoch
-            )
-            # TODO See if this works
-            # self.logger.experiment.add_figure(f"image_{i}", plt.imshow(single_image[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
-            fig = plt.figure(figsize=(10, 10))
-            plt.imshow(single_prediction[:, :, middle_slice])
-            self.logger.experiment.add_figure(
-                f"prediction_{i}", fig, global_step=self.current_epoch
-            )
-
+        self.logger.experiment.add_figure(
+            f"image_prediction", plt.gcf(), global_step=self.current_epoch
+        )
+        # TODO See if this works
+        # self.logger.experiment.add_figure(f"image_{i}", plt.imshow(single_image[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
+        fig = plt.figure(figsize=(10, 10))
+        plt.imshow(single_prediction[:, :, middle_slice])
+        self.logger.experiment.add_figure(
+            f"prediction", fig, global_step=self.current_epoch
+        )
 
     def run_example_inference(self):
         # Get the first batch of the validation data
@@ -597,25 +645,42 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
                     trainer.save_checkpoint(checkpoint_callback.best_model_path)
 
 
-if __name__ == "__main__":
-    print("*" * 80)
-    print(f"Device: {device}")
-    print(f"Cuda available: {torch.cuda.is_available()}")
-    print("*" * 80)
-
-    # set up loggers and checkpoints
-    # initialise the LightningModule
-
-    net = Net(learning_rate=1e-3,batch_size= 5, is_testing=False)
+def do_main(
+    learning_rate,
+    batch_size,
+    dropout,
+    number_res_units,
+    kernel_size,
+    kernel_upsample,
+    epocs=200,
+    log_name=RUN_NAME,
+):
+    checkpoint_fn = RUN_NAME + "checkpoint-{epoch:02d}-{val_dice:.2f}"
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "logs"
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
-        save_dir=log_dir.as_posix(), name="3_29_24_lightning_logs")
-    os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    checkpoint_fn = RUN_NAME + "checkpoint-{epoch:02d}-{val_dice:.2f}"
-    # initialise Lightning's trainer.
-    profiler = SimpleProfiler()
+        save_dir=log_dir.as_posix(), name=log_name
+    )
+    kernel_size = int(kernel_size)
+    kernel_upsample = int(kernel_upsample)
+    number_res_units = int(number_res_units)
+    batch_size = int(batch_size)
+    # Ensure that the values are valid for the model
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    if kernel_upsample % 2 == 0:
+        kernel_upsample += 1
+
+    net = Net(
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        dropout=dropout,
+        norm=Norm.BATCH,
+        number_res_units=number_res_units,
+        is_testing=False,
+        kernel_size=kernel_size,
+        kernel_upsample=kernel_upsample,
+    )
     checkpoint_callback = ModelCheckpoint(
         monitor="val_dice",
         mode="max",
@@ -623,14 +688,8 @@ if __name__ == "__main__":
         dirpath=log_dir.as_posix(),
         filename=checkpoint_fn,
     )
-
-    #
-    # print(f"Images shape: {images.shape}")
-    # print(f"Labels shape: {labels.shape}")
-    # print(f"Predictions shape: {predictions.shape}")
-
     trainer = pytorch_lightning.Trainer(
-        max_epochs=1000,
+        max_epochs=epocs,
         logger=tb_logger,
         accelerator="gpu",
         devices=[0],
@@ -645,6 +704,125 @@ if __name__ == "__main__":
     )
 
     trainer.fit(net)
+    return net.best_val_dice
 
 
+def do_baysian_optimization(
+    number_of_iterations: int = 10, number_of_points_to_probe: int = 10
+):
+    from bayes_opt import BayesianOptimization
+    from bayes_opt.event import Events
+    from bayes_opt.logger import JSONLogger
+    from bayes_opt.util import load_logs
+
+    min_learning_rate = 1e-6
+    max_learning_rate = 1e-2
+    min_batch_size = 1
+    max_batch_size = 30
+    min_dropout = 0.1
+    max_dropout = 0.5
+    min_number_res_units = 0
+    max_number_res_units = 5
+    min_kernel_size = 1
+    max_kernel_size = 5
+    min_kernel_upsample = 1
+    max_kernel_upsample = 5
+
+    optimizer_bounds = {
+        "learning_rate": (min_learning_rate, max_learning_rate),
+        "batch_size": (min_batch_size, max_batch_size),
+        "dropout": (min_dropout, max_dropout),
+        "number_res_units": (min_number_res_units, max_number_res_units),
+        "kernel_size": (min_kernel_size, max_kernel_size),
+        "kernel_upsample": (min_kernel_upsample, max_kernel_upsample),
+    }
+    optimizer_best_position = {
+        "learning_rate": 0.001,
+        "batch_size": 5,
+        "dropout": 0.1,
+        "number_res_units": 3,
+        "kernel_size": 3,
+        "kernel_upsample": 3,
+    }
+
+    current_iteration = 0
+
+    optimizer = BayesianOptimization(
+        f=do_main,
+        pbounds=optimizer_bounds,
+        random_state=42,
+        verbose=2,
+        allow_duplicate_points=True,
+    )
+    all_optimizer_logs: list[str] = list()
+    if len(all_optimizer_logs) > 0:
+        print(
+            f"Initializing optimizer with previous computations: {all_optimizer_logs}"
+        )
+        load_logs(optimizer, logs=all_optimizer_logs)
+    else:
+        optimizer.probe(
+            params=optimizer_best_position,
+            lazy=True,
+        )
+        # probe min and max
+        optimizer.probe(
+            params={
+                "learning_rate": min_learning_rate,
+                "batch_size": min_batch_size,
+                "dropout": min_dropout,
+                "number_res_units": min_number_res_units,
+                "kernel_size": min_kernel_size,
+                "kernel_upsample": min_kernel_upsample,
+            },
+            lazy=True,
+        )
+        optimizer.probe(
+            params={
+                "learning_rate": max_learning_rate,
+                "batch_size": max_batch_size,
+                "dropout": max_dropout,
+                "number_res_units": max_number_res_units,
+                "kernel_size": max_kernel_size,
+                "kernel_upsample": max_kernel_upsample,
+            },
+            lazy=True,
+        )
+        optimization_logs_folder_path: Path = (
+            Path(__file__).parent / "optimization_logs"
+        )
+        optimization_logs_folder_path.mkdir(parents=True, exist_ok=True)
+        optimizer_logs_fn: Path = (
+            optimization_logs_folder_path
+            / f"logs{str(RUN_NAME)}_iter_{current_iteration}.json"
+        )
+        logger = JSONLogger(path=optimizer_logs_fn.as_posix())
+        optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
+        all_optimizer_logs.append(optimizer_logs_fn.as_posix())
+        optimizer.maximize(init_points=10, n_iter=10)
+
+
+if __name__ == "__main__":
+    print("*" * 80)
+    print(f"Device: {device}")
+    print(f"Cuda available: {torch.cuda.is_available()}")
+    print("*" * 80)
+
+    # set up loggers and checkpoints
+    # initialise the LightningModule
+
+    os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
+    # do_main(
+    #     learning_rate=0.0001,
+    #     batch_size=1,
+    #     dropout=0.1,
+    #     number_res_units=3,
+    #     kernel_size=3,
+    #     kernel_upsample=3,
+    #     epocs=1000,
+    #     log_name=RUN_NAME,
+    # )
+    do_baysian_optimization(number_of_iterations=100, number_of_points_to_probe=100)
     print("Finished training")

@@ -3,7 +3,7 @@ cfgv==3.4.0
 click==8.1.7
 contourpy==1.2.0
 cycler==0.12.1
-dcm_classifier
+dcm_classifier==0.6.0rc12
 distlib==0.3.8
 filelock==3.13.1
 fonttools==4.47.2
@@ -54,3 +54,5 @@ python-dotenv
 pytorch-ignite==0.4.13
 pytorch-lightning
 tensorboard
+onnxruntime==1.16.3
+

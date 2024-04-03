@@ -6,8 +6,10 @@ import numpy as np
 import pandas as pd
 import pydicom
 import itk
-from dcm_classifier.dicom_volume import DicomSingleVolumeInfoBase
-from dcm_classifier.namic_dicom_typing import itk_read_from_dicomfn_list
+from dcm_classifier.dicom_volume import (
+    DicomSingleVolumeInfoBase,
+    itk_read_from_dicomfn_list,
+)
 
 
 class DataConverter:
