@@ -46,6 +46,30 @@ def init_stacked_data_lists():
     return image_paths, mask_paths
 
 
+def init_t2w_only_data_lists():
+    """
+    This function initializes the image and mask paths.
+
+    Args:
+    base_data_path (Path): The base path of the data.
+
+    Returns:
+    list: A list of image paths.
+    list: A list of mask paths.
+    """
+    base_data_path = Path(os.environ.get("DATA_PATH"))
+    print(f"Base data path: {base_data_path}")
+    # base_data_path = Path(
+    #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/preprocessed_data"
+    # )
+    mask_paths = []
+    image_paths = []
+    for dir in base_data_path.iterdir():
+        if dir.is_dir():
+            image_paths.append(dir / f"{dir.name}_resampled_normalized_t2w.nii.gz")
+            mask_paths.append(dir / f"{dir.name}_resampled_segmentations.nii.gz")
+
+    return image_paths, mask_paths
 class ModalityStackTransform:
     """
     A custom transformation to stack different modalities into a single multi-channel image.

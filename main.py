@@ -73,6 +73,7 @@ from pytorch_lightning.profilers import SimpleProfiler
 from pytorch_lightning.tuner import Tuner
 from sklearn.metrics import precision_score, accuracy_score, recall_score, f1_score
 from sklearn.model_selection import train_test_split
+from torch import device
 from torch.utils.tensorboard._utils import make_grid
 
 print_config()
