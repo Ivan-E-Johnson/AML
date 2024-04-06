@@ -1,25 +1,29 @@
+import argparse
+import os
+
 import itk
 import matplotlib.pyplot as plt
 import numpy as np
 import pytorch_lightning
 import torch
 from monai.config import print_config
-from monai.data import (
-    CacheDataset,
-    list_data_collate,
-)
+from monai.data import CacheDataset, list_data_collate
 from monai.data import DataLoader
-from monai.losses import DiceCELoss
+from monai.losses import DiceCELoss, TverskyLoss
 from monai.metrics import (
     DiceMetric,
     HausdorffDistanceMetric,
     SurfaceDistanceMetric,
 )
-from monai.networks.nets import SegResNet
+from monai.networks.layers import Norm
+from monai.networks.nets import UNet, SegResNet
 from monai.transforms import (
     Compose,
     EnsureChannelFirstD,
     RandFlipd,
+    AsDiscreted,
+    DataStatsD,
+    AsDiscrete,
 )
 from monai.transforms import (
     LoadImaged,
@@ -31,14 +35,19 @@ from monai.transforms import (
     RandRotated,
 )
 from monai.utils import UpsampleMode
+from monai.visualize import img2tensorboard
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.profilers import SimpleProfiler
 from sklearn.model_selection import train_test_split
 
-from support_functions import init_t2w_only_data_lists, BestModelCheckpoint
+from support_functions import (
+    init_stacked_data_lists,
+    ModalityStackTransformd,
+    BestModelCheckpoint,
+    LoadAndSplitLabelsToChannelsd,
+)
 
-print_config()
 from pathlib import Path
-import argparse
 
 # weights obtained from running weight_labels() in itk_preprocessing.py
 label_weights = {
@@ -49,7 +58,6 @@ label_weights = {
     "Fibromuscular Stroma": 0.023610225340136057,
 }
 from dotenv import load_dotenv
-import os
 
 # Load environment variables from .env file
 load_dotenv()
@@ -89,39 +97,45 @@ class SegNet(pytorch_lightning.LightningModule):
         self.is_testing = is_testing
         self.batch_size = batch_size
         self.learning_rate = learning_rate
-        self.using_multi_gpu = using_multi_gpu
+        self.multi_gpu = using_multi_gpu
 
         self._model = SegResNet(
             spatial_dims=3,
             init_filters=init_filters,
-            in_channels=1,
+            in_channels=3,
             out_channels=self.number_of_classes,
             dropout_prob=dropout_prob,
             blocks_down=blocks_down,
             blocks_up=blocks_up,
             upsample_mode=UpsampleMode.DECONV,
         )
+        # TODO Add the weights to the loss function and allow multichannel output
+        inverted_weights = [1 / v for v in label_weights.values()]
+        class_weights = torch.tensor(
+            np.array(inverted_weights).astype(np.float16), requires_grad=True
+        ).to(self.device)
 
-        self.loss_function = DiceCELoss(
+        self.dice_loss_function = DiceCELoss(
             softmax=True,
-            to_onehot_y=True,
-            squared_pred=True,
+            ce_weight=class_weights,
+            include_background=False,
+        )
+        self.tv_loss = TverskyLoss(
+            softmax=True,
+            alpha=0.3,
+            beta=0.7,
         )
         self.dice_metric = DiceMetric(
             include_background=False,
             reduction="mean",
-            get_not_nans=False,
-            num_classes=None,  # Infered from the data
         )
         self.hausdorff_metric = HausdorffDistanceMetric(
             include_background=False,
             reduction="mean",
-            get_not_nans=False,
         )
         self.surface_distance_metric = SurfaceDistanceMetric(
             include_background=False,
             reduction="mean",
-            get_not_nans=False,
         )
 
         self.best_val_dice = 0
@@ -147,7 +161,7 @@ class SegNet(pytorch_lightning.LightningModule):
         """
         # set up the correct data path
 
-        image_paths, mask_paths = init_t2w_only_data_lists()
+        image_paths, mask_paths = init_stacked_data_lists()
         train_image_paths, test_image_paths, train_mask_paths, test_mask_paths = (
             train_test_split(image_paths, mask_paths, test_size=0.2)
         )
@@ -172,9 +186,10 @@ class SegNet(pytorch_lightning.LightningModule):
         # define the data transforms
         self.train_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"], reader="ITKReader"),
+                LoadAndSplitLabelsToChannelsd(keys=["label"]),
+                ModalityStackTransformd(keys=["image"]),
                 EnsureChannelFirstD(
-                    keys=["image", "label"]
+                    keys=["image", "label"], channel_dim=0
                 ),  # Add channel to image and mask so
                 # Coarse Segmentation combine all mask
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
@@ -190,17 +205,27 @@ class SegNet(pytorch_lightning.LightningModule):
                 RandGaussianNoiseD(keys=["image"], prob=RandFlipd_prob / 2),
                 RandHistogramShiftD(keys=["image"], prob=RandFlipd_prob / 2),
                 ToTensord(keys=["image", "label"]),
+                # DataStatsD(keys=["image", "label"]),
             ]
         )
         self.validation_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"]),
-                EnsureChannelFirstD(keys=["image", "label"]),
+                LoadAndSplitLabelsToChannelsd(keys=["label"]),
+                ModalityStackTransformd(keys=["image"]),
+                EnsureChannelFirstD(
+                    keys=["image", "label"], channel_dim=0
+                ),  # Add channel to image and mask so
+                DataStatsD(keys=["image", "label"]),
+                EnsureChannelFirstD(
+                    keys=["image"], channel_dim=0
+                ),  # Add channel to image and mask so
+                EnsureChannelFirstD(keys=["label"]),
                 ToTensord(keys=["image", "label"]),
+                # DataStatsD(keys=["image", "label"]),
             ]
         )
 
-        number_dataset_workers = 8
+        # we use cached datasets - these are 10x faster than regular datasets
         self.train_ds = CacheDataset(
             data=train_files,
             transform=self.train_transforms,
@@ -215,23 +240,6 @@ class SegNet(pytorch_lightning.LightningModule):
             num_workers=4,
             runtime_cache=True,
         )
-        # self.train_ds = SmartCacheDataset(
-        #     data=train_files,
-        #     transform=self.train_transforms,
-        #     cache_num=10,
-        #     replace_rate=0.2,
-        #     num_init_workers=number_dataset_workers,
-        #     num_replace_workers=number_dataset_workers // 2,
-        # )
-        #
-        # self.val_ds = SmartCacheDataset(
-        #     data=val_files,
-        #     transform=self.validation_transforms,
-        #     cache_num=10,
-        #     replace_rate=0.2,
-        #     num_init_workers=number_dataset_workers,
-        #     num_replace_workers=number_dataset_workers // 2,
-        # )
 
     def train_dataloader(self):
         """
@@ -261,6 +269,7 @@ class SegNet(pytorch_lightning.LightningModule):
         return val_loader
 
     def configure_optimizers(self):
+        torch.enable_grad()
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
         return optimizer
@@ -289,17 +298,21 @@ class SegNet(pytorch_lightning.LightningModule):
         Returns:
         dict: The loss and the logs.
         """
+        torch.enable_grad()
         images, labels = batch["image"], batch["label"]
         output = self.forward(images)
+
         if self.is_testing:
             print("Training Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
             print(f"Output shape {output.shape}")
-        loss = self.loss_function(output, labels)
-        # Collapsing the output to a single channel
-        predictions = torch.argmax(output, dim=1, keepdim=True)
-        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
+
+        loss = self.dice_loss_function(output, labels)
+        tv_loss = self.tv_loss(output, labels)
+
+        prob_output = torch.softmax(output, dim=1)
+        dice = self.dice_metric(y_pred=prob_output, y=labels).mean()
         # Log metrics
         self.log(
             "train_dice",
@@ -307,7 +320,7 @@ class SegNet(pytorch_lightning.LightningModule):
             on_step=False,
             on_epoch=True,
             reduce_fx=torch.mean,
-            sync_dist=self.using_multi_gpu,
+            sync_dist=self.multi_gpu,
             batch_size=self.batch_size,
         )
         self.log(
@@ -316,35 +329,45 @@ class SegNet(pytorch_lightning.LightningModule):
             on_step=False,
             on_epoch=True,
             reduce_fx=torch.mean,
-            sync_dist=self.using_multi_gpu,
+            sync_dist=self.multi_gpu,
+            batch_size=self.batch_size,
+        )
+        self.log(
+            "train_tv_loss",
+            tv_loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx=torch.mean,
+            sync_dist=self.multi_gpu,
             batch_size=self.batch_size,
         )
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        images, labels = batch["image"], batch["label"]
-
         torch.no_grad()
+        images, labels = batch["image"], batch["label"]
         outputs = self.forward(images)
+
         if self.is_testing:
             print("Validation Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
             print(f"Shape after post_pred: {outputs.shape}")
 
-        loss = self.loss_function(outputs, labels)
+        loss = self.dice_loss_function(outputs, labels)
+        tv_loss = self.tv_loss(outputs, labels)
+        prob_output = torch.softmax(outputs, dim=1)
 
-        predictions = torch.argmax(outputs, dim=1, keepdim=True)
-
-        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
-        haussdorf = self.hausdorff_metric(y_pred=predictions, y=labels).mean()
+        # Calculate accuracy, precision, recall, and F1 score
+        dice = self.dice_metric(y_pred=prob_output, y=labels).mean()
+        haussdorf = self.hausdorff_metric(y_pred=prob_output, y=labels).mean()
         surface_distance = self.surface_distance_metric(
-            y_pred=predictions, y=labels
+            y_pred=prob_output, y=labels
         ).mean()
 
         if self.is_testing:
-            print(f"Predictions shape: {predictions.shape}")
+            print(f"Predictions shape: {outputs.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
             print(f"Surface Distance: {surface_distance}")
@@ -355,7 +378,15 @@ class SegNet(pytorch_lightning.LightningModule):
             on_step=False,
             on_epoch=True,
             batch_size=self.batch_size,
-            sync_dist=self.using_multi_gpu,
+            sync_dist=self.multi_gpu,
+        )
+        self.log(
+            name="tv_loss",
+            value=tv_loss,
+            on_step=False,
+            on_epoch=True,
+            batch_size=self.batch_size,
+            sync_dist=self.multi_gpu,
         )
         self.log(
             name="surface_distance",
@@ -363,7 +394,7 @@ class SegNet(pytorch_lightning.LightningModule):
             on_step=False,
             on_epoch=True,
             batch_size=self.batch_size,
-            sync_dist=self.using_multi_gpu,
+            sync_dist=self.multi_gpu,
         )
         # Log metrics
         self.log(
@@ -372,7 +403,7 @@ class SegNet(pytorch_lightning.LightningModule):
             on_step=False,
             on_epoch=True,
             batch_size=self.batch_size,
-            sync_dist=self.using_multi_gpu,
+            sync_dist=self.multi_gpu,
         )
         self.log(
             "val_loss",
@@ -380,67 +411,13 @@ class SegNet(pytorch_lightning.LightningModule):
             on_step=False,
             on_epoch=True,
             batch_size=self.batch_size,
-            sync_dist=self.using_multi_gpu,
+            sync_dist=self.multi_gpu,
         )
+        torch.enable_grad()
         return loss
 
     def on_validation_epoch_end(self):
-        # Get the first batch of the validation data
-        val_loader = self.val_dataloader()
-        images, labels = (
-            next(iter(val_loader))["image"],
-            next(iter(val_loader))["label"],
-        )
-
-        # Move images and labels to device
-        images = images.to(self.device)
-        labels = labels.to(self.device)
-
         torch.no_grad()
-
-        # Run the inference
-        outputs = self.forward(images)
-        predictions = torch.argmax(outputs, dim=1, keepdim=True)
-
-        # Convert the tensors to numpy arrays for saving with ITK
-        images_np = images.cpu().numpy()
-
-        labels_np = labels.cpu().numpy()
-
-        predictions_np = predictions.cpu().numpy()
-
-        images_np = np.squeeze(images_np, axis=1)
-        predictions_np = np.squeeze(predictions_np, axis=1)
-        labels_np = np.squeeze(labels_np, axis=1)
-        for i in range(min(3, images_np.shape[0])):
-            single_image = images_np[i, :, :, :]
-            single_label = labels_np[i, :, :, :]
-            single_prediction = predictions_np[i, :, :, :]
-            plt.figure(figsize=(10, 10))
-            plt.subplot(1, 3, 1)
-            middle_slice = single_image.shape[-1] // 2
-            plt.imshow(single_image[:, :, middle_slice], cmap="gray")
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(single_prediction[:, :, middle_slice])
-            plt.title("Prediction")
-            plt.subplot(1, 3, 3)
-            plt.imshow(single_label[:, :, middle_slice])
-            plt.title("Label")
-            # TODO Add legend so differentiate the classes
-
-            self.logger.experiment.add_figure(
-                f"image_prediction_{i}", plt.gcf(), global_step=self.current_epoch
-            )
-            # TODO See if this works
-            # self.logger.experiment.add_figure(f"image_{i}", plt.imshow(single_image[:, :, middle_slice], cmap="gray"), global_step=self.current_epoch)
-            fig = plt.figure(figsize=(10, 10))
-            plt.imshow(single_prediction[:, :, middle_slice])
-            self.logger.experiment.add_figure(
-                f"prediction_{i}", fig, global_step=self.current_epoch
-            )
-
-    def run_example_inference(self):
         # Get the first batch of the validation data
         val_loader = self.val_dataloader()
         images, labels = (
@@ -454,52 +431,40 @@ class SegNet(pytorch_lightning.LightningModule):
 
         # Run the inference
         outputs = self.forward(images)
-        predictions = torch.argmax(outputs, dim=1, keepdim=True)
+        print(f"Output shape: {outputs.shape}")
+        print(f"Labels shape: {labels.shape}")
+        print(f"Images shape: {images.shape}")
+        print(f"Images min: {images.shape[:-3]}")
 
-        # Calculate the dice score
-        dice = self.dice_metric(y_pred=predictions, y=labels)
-        print(f"Dice: {dice}")
+        # center_slice = images.shape[0] //2
+        # images = images[0,:, center_slice, :, :]
+        # outputs = outputs[0,:, center_slice, :, :]
+        # TODO @joslin can you figure out why these are plotting incorrectly?
+        img2tensorboard.plot_2d_or_3d_image(
+            writer=self.logger.experiment,
+            data=images,
+            step=self.current_epoch,
+            max_channels=3,
+            tag="Validation/Image",
+        )
 
-        # Convert the tensors to numpy arrays for saving with ITK
-        images_np = images.cpu().numpy()
-        labels_np = labels.cpu().numpy()
-        predictions_np = predictions.cpu().numpy()
-        print(f"Images_np shape: {images_np.shape}")
-        print(f"Labels_np shape: {labels_np.shape}")
-        print(f"Predictions_np shape: {predictions_np.shape}")
+        img2tensorboard.plot_2d_or_3d_image(
+            writer=self.logger.experiment,
+            data=outputs,
+            step=self.current_epoch,
+            max_channels=self.number_of_classes,
+            tag="Validation/Label",
+        )
 
-        images_np = np.squeeze(images_np, axis=1)
-        labels_np = np.squeeze(labels_np, axis=1)
-        predictions_np = np.squeeze(predictions_np, axis=1)
-        print(f"Images_np shape: {images_np.shape}")
-        print(f"Labels_np shape: {labels_np.shape}")
-        print(f"Predictions_np shape: {predictions_np.shape}")
-        for i in range(np.shape(images_np)[0]):
-            single_image = images_np[i, :, :, :]
-            single_label = labels_np[i, :, :, :]
-            single_prediction = predictions_np[i, :, :, :]
-            plt.figure(figsize=(10, 10))
-            plt.subplot(1, 3, 1)
-            middle_slice = single_image.shape[-1] // 2
-            plt.imshow(single_image[:, :, middle_slice], cmap="gray")
-            plt.title("Image")
-            plt.subplot(1, 3, 2)
-            plt.imshow(single_label[:, :, middle_slice], cmap="gray")
-            plt.title("Label")
-            plt.subplot(1, 3, 3)
-            plt.imshow(single_prediction[:, :, middle_slice])
-
-            plt.savefig(f"image_prediction_{i}.png")
-
-            itk.imwrite(itk.GetImageFromArray(single_image), f"image_{i}.nii.gz")
-            itk.imwrite(itk.GetImageFromArray(single_label), f"label_{i}.nii.gz")
-
-            itk.imwrite(
-                itk.GetImageFromArray(single_prediction.astype(np.uint8)),
-                f"prediction_{i}.nii.gz",
-            )
-
-        return images, labels, predictions
+        # oneHotLabel = AsDiscrete(to_onehot=self.number_of_classes)(labels)
+        # img2tensorboard.plot_2d_or_3d_image(
+        #     writer=self.logger.experiment,
+        #     data=oneHotLabel,
+        #     step=self.current_epoch,
+        #     max_channels=self.number_of_classes,
+        #     tag="Validation/Prediction",
+        # )
+        torch.enable_grad()
 
 
 def train_model(
@@ -512,20 +477,28 @@ def train_model(
     epochs: int,
     experiment_name: str,
 ):
+    os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    accelerator = os.environ.get("ACCELERATOR", "gpu")
+    gpu_id = os.environ.get("GPU_ID", 0)
+
+    devices: list[int] | str
+    if accelerator == "cpu":
+        using_multi_gpu = False
+        devices = "auto"
+    else:
+        devices = [int(gpu_id)]
     print("*" * 80)
     print(f"Cuda available: {torch.cuda.is_available()}")
+    print(f"Using Multi GPU: {using_multi_gpu}")
+    print(f"Devices: {devices}")
+    print(f"Accelerator: {accelerator}")
     print("*" * 80)
+
     log_every_n_steps: int = int(
         (98 * 0.8) // batch_size
-    )  # Want to ensure that we log every epoch
-    accelerator = os.environ.get("ACCELERATOR")
-    gpu_id = os.environ.get("GPU_ID")
-    gpus = [int(gpu_id)]
-    # if len(gpus) > 1
-    #     # Not implemented yet
-    #     using_multi_gpu = True
-    # set up loggers and checkpoints
-    # initialise the LightningModule
+    )  # Log every 80% of the training data
+
     init_filters = int(init_filters)
     batch_size = int(batch_size)
     epochs = int(epochs)
@@ -545,8 +518,7 @@ def train_model(
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
         save_dir=log_dir.as_posix(), name=experiment_name
     )
-    os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
     checkpoint_fn = experiment_name + "checkpoint-{epoch:02d}-{val_dice:.2f}"
     # initialise Lightning's trainer.
     checkpoint_callback = ModelCheckpoint(
@@ -561,7 +533,7 @@ def train_model(
         max_epochs=epochs,
         logger=tb_logger,
         accelerator=accelerator,
-        devices=gpus,
+        devices=devices,
         enable_checkpointing=True,
         num_sanity_val_steps=1,
         log_every_n_steps=log_every_n_steps,

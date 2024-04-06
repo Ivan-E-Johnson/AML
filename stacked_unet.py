@@ -9,7 +9,7 @@ import torch
 from monai.config import print_config
 from monai.data import CacheDataset, list_data_collate
 from monai.data import DataLoader
-from monai.losses import DiceCELoss
+from monai.losses import DiceCELoss, TverskyLoss
 from monai.metrics import (
     DiceMetric,
     HausdorffDistanceMetric,
@@ -41,8 +41,9 @@ from sklearn.model_selection import train_test_split
 
 from support_functions import (
     init_stacked_data_lists,
-    ModalityStackTransform,
+    ModalityStackTransformd,
     BestModelCheckpoint,
+    LoadAndSplitLabelsToChannelsd,
 )
 
 from pathlib import Path
@@ -61,13 +62,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-class Net(pytorch_lightning.LightningModule):
+class StackedNet(pytorch_lightning.LightningModule):
     """
     This class defines the network architecture.
 
     Attributes:
     _model (UNet): The UNet model.
-    loss_function (DiceLoss): The loss function.
+    dice_loss_function (DiceLoss): The loss function.
     post_pred (Compose): The post prediction transformations.
     post_label (Compose): The post label transformations.
     dice_metric (DiceMetric): The dice metric.
@@ -120,30 +121,28 @@ class Net(pytorch_lightning.LightningModule):
         class_weights = torch.tensor(
             np.array(inverted_weights).astype(np.float16), requires_grad=True
         ).to(self.device)
-        self.onehot_loss = DiceCELoss(
+
+        self.dice_loss_function = DiceCELoss(
             softmax=True,
             ce_weight=class_weights,
             include_background=False,
         )
-        self.loss_function = DiceCELoss(
-            softmax=True, to_onehot_y=True, squared_pred=True
-        )  # TODO Implement secondary loss functions
-
+        self.tv_loss = TverskyLoss(
+            softmax=True,
+            alpha=0.3,
+            beta=0.7,
+        )
         self.dice_metric = DiceMetric(
             include_background=False,
             reduction="mean",
-            get_not_nans=False,
-            num_classes=None,  # Infered from the data
         )
         self.hausdorff_metric = HausdorffDistanceMetric(
             include_background=False,
             reduction="mean",
-            get_not_nans=False,
         )
         self.surface_distance_metric = SurfaceDistanceMetric(
             include_background=False,
             reduction="mean",
-            get_not_nans=False,
         )
 
         self.best_val_dice = 0
@@ -194,12 +193,11 @@ class Net(pytorch_lightning.LightningModule):
         # define the data transforms
         self.train_transforms = Compose(
             [
-                ModalityStackTransform(keys=["image"]),
-                LoadImaged(keys=["label"]),
+                LoadAndSplitLabelsToChannelsd(keys=["label"]),
+                ModalityStackTransformd(keys=["image"]),
                 EnsureChannelFirstD(
-                    keys=["image"], channel_dim=0
+                    keys=["image", "label"], channel_dim=0
                 ),  # Add channel to image and mask so
-                EnsureChannelFirstD(keys=["label"]),
                 # Coarse Segmentation combine all mask
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=1),
@@ -219,9 +217,12 @@ class Net(pytorch_lightning.LightningModule):
         )
         self.validation_transforms = Compose(
             [
-                ModalityStackTransform(keys=["image"]),
-                LoadImaged(keys=["label"]),
-                # DataStatsD(keys=["image", "label"]),
+                LoadAndSplitLabelsToChannelsd(keys=["label"]),
+                ModalityStackTransformd(keys=["image"]),
+                EnsureChannelFirstD(
+                    keys=["image", "label"], channel_dim=0
+                ),  # Add channel to image and mask so
+                DataStatsD(keys=["image", "label"]),
                 EnsureChannelFirstD(
                     keys=["image"], channel_dim=0
                 ),  # Add channel to image and mask so
@@ -314,13 +315,11 @@ class Net(pytorch_lightning.LightningModule):
             print(f"Labels.Shape = {labels.shape}")
             print(f"Output shape {output.shape}")
 
-        loss = self.loss_function(output, labels)
+        loss = self.dice_loss_function(output, labels)
+        tv_loss = self.tv_loss(output, labels)
 
-        predictions = torch.argmax(
-            output, dim=1, keepdim=True
-        )  # Assuming output is logits
-
-        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
+        prob_output = torch.softmax(output, dim=1)
+        dice = self.dice_metric(y_pred=prob_output, y=labels).mean()
         # Log metrics
         self.log(
             "train_dice",
@@ -334,6 +333,15 @@ class Net(pytorch_lightning.LightningModule):
         self.log(
             "train_loss",
             loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx=torch.mean,
+            sync_dist=self.multi_gpu,
+            batch_size=self.batch_size,
+        )
+        self.log(
+            "train_tv_loss",
+            tv_loss,
             on_step=False,
             on_epoch=True,
             reduce_fx=torch.mean,
@@ -354,20 +362,19 @@ class Net(pytorch_lightning.LightningModule):
             print(f"Labels.Shape = {labels.shape}")
             print(f"Shape after post_pred: {outputs.shape}")
 
-        loss = self.loss_function(outputs, labels)
-        # Calculate accuracy, precision, recall, and F1 score
-        predictions = torch.argmax(
-            outputs, dim=1, keepdim=True
-        )  # Assuming output is logits
+        loss = self.dice_loss_function(outputs, labels)
+        tv_loss = self.tv_loss(outputs, labels)
+        prob_output = torch.softmax(outputs, dim=1)
 
-        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
-        haussdorf = self.hausdorff_metric(y_pred=predictions, y=labels).mean()
+        # Calculate accuracy, precision, recall, and F1 score
+        dice = self.dice_metric(y_pred=prob_output, y=labels).mean()
+        haussdorf = self.hausdorff_metric(y_pred=prob_output, y=labels).mean()
         surface_distance = self.surface_distance_metric(
-            y_pred=predictions, y=labels
+            y_pred=prob_output, y=labels
         ).mean()
 
         if self.is_testing:
-            print(f"Predictions shape: {predictions.shape}")
+            print(f"Predictions shape: {outputs.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
             print(f"Surface Distance: {surface_distance}")
@@ -375,6 +382,14 @@ class Net(pytorch_lightning.LightningModule):
         self.log(
             name="haussdorf_distance",
             value=haussdorf,
+            on_step=False,
+            on_epoch=True,
+            batch_size=self.batch_size,
+            sync_dist=self.multi_gpu,
+        )
+        self.log(
+            name="tv_loss",
+            value=tv_loss,
             on_step=False,
             on_epoch=True,
             batch_size=self.batch_size,
@@ -493,7 +508,7 @@ def train_model(
     print(f"Accelerator: {accelerator}")
     print("*" * 80)
 
-    net = Net(
+    net = StackedNet(
         batch_size=batch_size,
         learning_rate=learning_rate,
         dropout=dropout_prob,
@@ -557,7 +572,9 @@ if __name__ == "__main__":
     args.add_argument("--strides", type=tuple, default=(2, 2, 2, 2))
     args.add_argument("--channels", type=tuple, default=(16, 32, 128, 256))
     args.add_argument("--activation", type=str, default="PReLU")
-    args.add_argument("--experiment_name", type=str, default="basic_stacked_unet")
+    args.add_argument(
+        "--experiment_name", type=str, default="basic_stacked_unet_stacked_labels"
+    )
     args.add_argument("--epochs", type=int, default=1000)
     # args.add_argument("--using_multi_gpu", type=bool, default=False)
     # args.add_argument("--is_testing", type=bool, default=False)

@@ -70,7 +70,9 @@ def init_t2w_only_data_lists():
             mask_paths.append(dir / f"{dir.name}_resampled_segmentations.nii.gz")
 
     return image_paths, mask_paths
-class ModalityStackTransform:
+
+
+class ModalityStackTransformd:
     """
     A custom transformation to stack different modalities into a single multi-channel image.
     Assumes modalities are stored in separate files with a consistent naming scheme.
@@ -102,6 +104,32 @@ class ModalityStackTransform:
             # print(f"Stacked image shape: {stacked_image.shape}")
             # print(f"Stacked image dtype: {stacked_image.dtype}")
 
+        return d
+
+
+class LoadAndSplitLabelsToChannelsd:
+    """
+    A custom transformation to convert a label image to a one-hot encoded tensor.
+    """
+
+    def __init__(self, keys):
+        self.keys = keys
+
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            label = itk.imread(d[key])
+            label_array = itk.array_from_image(label)
+            unique_values = np.unique(label_array)
+            num_classes = len(unique_values)
+
+            # Create a one-hot encoded tensor
+            one_hot = np.zeros((num_classes, *label_array.shape), dtype=np.float32)
+            for i, value in enumerate(unique_values):
+                one_hot[i] = label_array == value
+            one_hot = np.moveaxis(one_hot, 1, -1)
+
+            d["label"] = one_hot
         return d
 
 
