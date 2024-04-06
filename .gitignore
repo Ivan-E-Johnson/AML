@@ -3,3 +3,4 @@
 /lightning_logs/version_0/hparams.yaml
 /secondary_image_info.csv
 /baysian_optimization_cii/
+/stacked_logs/

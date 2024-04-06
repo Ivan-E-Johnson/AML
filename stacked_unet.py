@@ -3,6 +3,7 @@ import os
 
 import itk
 import matplotlib.pyplot as plt
+import monai.visualize
 import numpy as np
 import pytorch_lightning
 import torch
@@ -36,6 +37,7 @@ from monai.transforms import (
 )
 from monai.visualize import img2tensorboard
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.cli import ReduceLROnPlateau
 from pytorch_lightning.profilers import SimpleProfiler
 from sklearn.model_selection import train_test_split
 
@@ -44,6 +46,7 @@ from support_functions import (
     ModalityStackTransformd,
     BestModelCheckpoint,
     LoadAndSplitLabelsToChannelsd,
+    convert_logits_to_one_hot,
 )
 
 from pathlib import Path
@@ -117,10 +120,10 @@ class StackedNet(pytorch_lightning.LightningModule):
             act=activation,
         )
         # TODO Add the weights to the loss function and allow multichannel output
-        inverted_weights = [1 / v for v in label_weights.values()]
-        class_weights = torch.tensor(
-            np.array(inverted_weights).astype(np.float16), requires_grad=True
-        ).to(self.device)
+
+        class_weights = torch.tensor([0.0002, 0.6085, 0.2933, 3.8166, 42.3545]).to(
+            self.device
+        )
 
         self.dice_loss_function = DiceCELoss(
             softmax=True,
@@ -134,15 +137,13 @@ class StackedNet(pytorch_lightning.LightningModule):
         )
         self.dice_metric = DiceMetric(
             include_background=False,
-            reduction="mean",
+            num_classes=self.number_of_classes,
         )
         self.hausdorff_metric = HausdorffDistanceMetric(
             include_background=False,
-            reduction="mean",
         )
         self.surface_distance_metric = SurfaceDistanceMetric(
             include_background=False,
-            reduction="mean",
         )
 
         self.best_val_dice = 0
@@ -279,20 +280,20 @@ class StackedNet(pytorch_lightning.LightningModule):
         torch.enable_grad()
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
-        return optimizer
-        # scheduler = ReduceLROnPlateau(
-        #     optimizer,
-        #     mode="min",
-        #     factor=0.1,
-        #     patience=10,
-        #     verbose=True,
-        #     monitor="val_loss",
-        # )
-        # return {
-        #     "optimizer": optimizer,
-        #     "lr_scheduler": scheduler,
-        #     "monitor": "val_loss",
-        # }
+        # return optimizer
+        scheduler = ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=0.1,
+            patience=10,
+            verbose=True,
+            monitor="val_loss",
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler,
+            "monitor": "val_loss",
+        }
 
     def training_step(self, batch, batch_idx):
         """
@@ -307,19 +308,17 @@ class StackedNet(pytorch_lightning.LightningModule):
         """
         torch.enable_grad()
         images, labels = batch["image"], batch["label"]
-        output = self.forward(images)
+        outputs = self.forward(images)
 
         if self.is_testing:
             print("Training Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
-            print(f"Output shape {output.shape}")
-
-        loss = self.dice_loss_function(output, labels)
-        tv_loss = self.tv_loss(output, labels)
-
-        prob_output = torch.softmax(output, dim=1)
-        dice = self.dice_metric(y_pred=prob_output, y=labels).mean()
+            print(f"outputs shape {outputs.shape}")
+        loss = self.dice_loss_function(outputs, labels)
+        tv_loss = self.tv_loss(outputs, labels)
+        onehot_predictions = convert_logits_to_one_hot(outputs)
+        dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
         # Log metrics
         self.log(
             "train_dice",
@@ -364,13 +363,12 @@ class StackedNet(pytorch_lightning.LightningModule):
 
         loss = self.dice_loss_function(outputs, labels)
         tv_loss = self.tv_loss(outputs, labels)
-        prob_output = torch.softmax(outputs, dim=1)
-
+        onehot_predictions = convert_logits_to_one_hot(outputs)
         # Calculate accuracy, precision, recall, and F1 score
-        dice = self.dice_metric(y_pred=prob_output, y=labels).mean()
-        haussdorf = self.hausdorff_metric(y_pred=prob_output, y=labels).mean()
+        dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
+        haussdorf = self.hausdorff_metric(y_pred=onehot_predictions, y=labels).mean()
         surface_distance = self.surface_distance_metric(
-            y_pred=prob_output, y=labels
+            y_pred=onehot_predictions, y=labels
         ).mean()
 
         if self.is_testing:
@@ -436,41 +434,34 @@ class StackedNet(pytorch_lightning.LightningModule):
         images = images.to(self.device)
         labels = labels.to(self.device)
 
+        # Onlys select the first image and label
+
         # Run the inference
         outputs = self.forward(images)
+        outputs = convert_logits_to_one_hot(outputs)
+
+        print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
         print(f"Output shape: {outputs.shape}")
         print(f"Labels shape: {labels.shape}")
         print(f"Images shape: {images.shape}")
-        print(f"Images min: {images.shape[:-3]}")
 
-        # center_slice = images.shape[0] //2
-        # images = images[0,:, center_slice, :, :]
-        # outputs = outputs[0,:, center_slice, :, :]
-        # TODO @joslin can you figure out why these are plotting incorrectly?
-        img2tensorboard.plot_2d_or_3d_image(
-            writer=self.logger.experiment,
-            data=images,
+        monai.visualize.plot_2d_or_3d_image(
+            data=labels,
+            tag=f"Labels",
             step=self.current_epoch,
-            max_channels=3,
-            tag="Validation/Image",
-        )
-
-        img2tensorboard.plot_2d_or_3d_image(
             writer=self.logger.experiment,
-            data=outputs,
-            step=self.current_epoch,
             max_channels=self.number_of_classes,
-            tag="Validation/Label",
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=outputs,
+            tag=f"Predictions",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            max_channels=self.number_of_classes,
+            frame_dim=-1,
         )
 
-        # oneHotLabel = AsDiscrete(to_onehot=self.number_of_classes)(labels)
-        # img2tensorboard.plot_2d_or_3d_image(
-        #     writer=self.logger.experiment,
-        #     data=oneHotLabel,
-        #     step=self.current_epoch,
-        #     max_channels=self.number_of_classes,
-        #     tag="Validation/Prediction",
-        # )
         torch.enable_grad()
 
 
@@ -519,7 +510,7 @@ def train_model(
         channels=channels,
         activation=activation,
         number_res_units=number_res_units,
-        is_testing=is_testing,
+        is_testing=True,
         multi_gpu=using_multi_gpu,
     )
     current_file_loc = Path(__file__).parent

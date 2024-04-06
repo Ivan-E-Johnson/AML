@@ -4,6 +4,7 @@ from pathlib import Path
 import itk
 import numpy as np
 import pytorch_lightning
+import torch
 
 
 def convert_to_bi_name(name: str):
@@ -159,3 +160,21 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
                         f"{self.experiment_name}_best_model.pth",
                     )
                     trainer.save_checkpoint(checkpoint_callback.best_model_path)
+
+
+def convert_logits_to_one_hot(logits):
+    """
+    This function converts the logits to a one-hot encoded tensor.
+
+    Args:
+    logits (torch.Tensor): The logits tensor.
+
+    Returns:
+    torch.Tensor: The one-hot encoded tensor.
+    """
+    num_classes = logits.shape[1]
+    prob_outputs = torch.softmax(logits, dim=1)
+    prob_outputs = prob_outputs.argmax(dim=1)
+    prob_outputs = torch.nn.functional.one_hot(prob_outputs, num_classes=num_classes)
+    prob_outputs = prob_outputs.moveaxis(-1, 1)
+    return prob_outputs
