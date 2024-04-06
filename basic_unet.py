@@ -426,21 +426,27 @@ class Net(pytorch_lightning.LightningModule):
         # images = images[0,:, center_slice, :, :]
         # outputs = outputs[0,:, center_slice, :, :]
         # TODO @joslin can you figure out why these are plotting incorrectly?
-        img2tensorboard.plot_2d_or_3d_image(
-            writer=self.logger.experiment,
-            data=images,
-            step=self.current_epoch,
-            max_channels=3,
-            tag="Validation/Image",
-        )
+        center_slice_idx = images.shape[4] // 2  # This will select the middle index of the depth dimension
 
-        img2tensorboard.plot_2d_or_3d_image(
-            writer=self.logger.experiment,
-            data=outputs,
-            step=self.current_epoch,
-            max_channels=self.number_of_classes,
-            tag="Validation/Label",
-        )
+        # Select the middle slice for images and labels, and remove the depth dimension
+        # The new shape should be (batch_size, channels, height, width)
+        images_2d = images[:, :, :, :, center_slice_idx]
+        labels_2d = labels[:, :, :, :, center_slice_idx]
+        images_2d = images_2d.expand(-1, 3, -1, -1)
+        labels_2d = labels_2d.expand(-1, 3, -1, -1)
+        images_2d = (images_2d - images_2d.min()) / (images_2d.max() - images_2d.min())
+        labels_2d = (labels_2d - labels_2d.min()) / (labels_2d.max() - labels_2d.min())
+
+        # Since you have a single channel, you might need to repeat it to make it 3 channels for RGB
+        # TensorBoard expects either 1 channel (grayscale) or 3 channels (RGB), but usually handles 1 channel correctly
+        if images_2d.shape[1] == 1:
+            images_2d = images_2d.repeat(1, 3, 1, 1)  # Repeat the single channel three times
+        if labels_2d.shape[1] == 1:
+            labels_2d = labels_2d.repeat(1, 3, 1, 1)
+
+        # Log the 2D images to TensorBoard
+        self.logger.experiment.add_images('Validation/Images', images_2d, self.current_epoch)
+        self.logger.experiment.add_images('Validation/Label', labels_2d, self.current_epoch)
 
         # oneHotLabel = AsDiscrete(to_onehot=self.number_of_classes)(labels)
         # img2tensorboard.plot_2d_or_3d_image(
@@ -552,7 +558,7 @@ if __name__ == "__main__":
     args.add_argument("--channels", type=tuple, default=(16, 32, 128, 256))
     args.add_argument("--activation", type=str, default="PReLU")
     args.add_argument("--experiment_name", type=str, default="basic_unet")
-    args.add_argument("--epochs", type=int, default=1000)
+    args.add_argument("--epochs", type=int, default=3)
     # args.add_argument("--using_multi_gpu", type=bool, default=False)
     # args.add_argument("--is_testing", type=bool, default=False)
     args = args.parse_args()
