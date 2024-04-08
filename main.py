@@ -274,7 +274,7 @@ class Net(pytorch_lightning.LightningModule):
 
         self.best_val_dice = 0
         self.best_val_epoch = 0
-        self.prepare_data()
+        # self.prepare_data()
         self.save_hyperparameters()
 
     def forward(self, x):

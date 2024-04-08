@@ -3,13 +3,14 @@ import os
 
 import itk
 import matplotlib.pyplot as plt
+import monai
 import numpy as np
 import pytorch_lightning
 import torch
 from monai.config import print_config
 from monai.data import CacheDataset, list_data_collate
 from monai.data import DataLoader
-from monai.losses import DiceCELoss
+from monai.losses import DiceCELoss, TverskyLoss
 from monai.metrics import (
     DiceMetric,
     HausdorffDistanceMetric,
@@ -38,10 +39,13 @@ from monai.visualize import img2tensorboard
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.profilers import SimpleProfiler
 from sklearn.model_selection import train_test_split
+from torch import device
 
 from support_functions import (
     init_t2w_only_data_lists,
     BestModelCheckpoint,
+    convert_logits_to_one_hot,
+    LoadAndSplitLabelsToChannelsd,
 )
 
 from pathlib import Path
@@ -58,6 +62,8 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class Net(pytorch_lightning.LightningModule):
@@ -113,21 +119,21 @@ class Net(pytorch_lightning.LightningModule):
             up_kernel_size=kernel_upsample,
             dropout=dropout,
             act=activation,
-        )
-        # TODO Add the weights to the loss function and allow multichannel output
-        inverted_weights = [1 / v for v in label_weights.values()]
-        class_weights = torch.tensor(
-            np.array(inverted_weights).astype(np.float16), requires_grad=True
-        ).to(self.device)
-        self.onehot_loss = DiceCELoss(
-            softmax=True,
-            ce_weight=class_weights,
-            include_background=False,
-        )
-        self.loss_function = DiceCELoss(
-            softmax=True, to_onehot_y=True, squared_pred=True
-        )  # TODO Implement secondary loss functions
+        ).to(device)
 
+        # TODO Add the weights to the loss function and allow multichannel output
+        # inverted_weights = [1 / v for v in label_weights.values()]
+        # class_weights = torch.tensor(
+        #     np.array(inverted_weights).astype(np.float16), requires_grad=True
+        # ).to(self.device)
+        self.dice_loss_function = DiceCELoss(
+            softmax=True, squared_pred=True
+        )  # TODO Implement secondary loss functions
+        self.tv_loss = TverskyLoss(
+            softmax=True,
+            alpha=0.3,
+            beta=0.7,
+        )
         self.dice_metric = DiceMetric(
             include_background=False,
             reduction="mean",
@@ -144,7 +150,6 @@ class Net(pytorch_lightning.LightningModule):
             reduction="mean",
             get_not_nans=False,
         )
-
         self.best_val_dice = 0
         self.best_val_epoch = 0
         self.prepare_data()
@@ -193,10 +198,10 @@ class Net(pytorch_lightning.LightningModule):
         # define the data transforms
         self.train_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"], reader="ITKReader", image_only=False),
-                EnsureChannelFirstD(
-                    keys=["image", "label"]
-                ),
+                LoadAndSplitLabelsToChannelsd(keys=["label"]),
+                EnsureChannelFirstD(keys=["label"], channel_dim=0),
+                LoadImaged(keys=["image"], reader="ITKReader", image_only=False),
+                EnsureChannelFirstD(keys=["image"]),
                 # Coarse Segmentation combine all mask
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=1),
@@ -216,10 +221,10 @@ class Net(pytorch_lightning.LightningModule):
         )
         self.validation_transforms = Compose(
             [
-                LoadImaged(keys=["image", "label"], reader="ITKReader", image_only=False),
-                EnsureChannelFirstD(
-                    keys=["image", "label"]
-                ),
+                LoadAndSplitLabelsToChannelsd(keys=["label"]),
+                EnsureChannelFirstD(keys=["label"], channel_dim=0),
+                LoadImaged(keys=["image"], reader="ITKReader", image_only=False),
+                EnsureChannelFirstD(keys=["image"]),
                 ToTensord(keys=["image", "label"]),
                 # DataStatsD(keys=["image", "label"]),
             ]
@@ -299,22 +304,18 @@ class Net(pytorch_lightning.LightningModule):
         dict: The loss and the logs.
         """
         torch.enable_grad()
-        images, labels = batch["image"], batch["label"]
-        output = self.forward(images)
+        images, labels = batch["image"].to(device), batch["label"].to(device)
+        outputs = self.forward(images)
 
         if self.is_testing:
             print("Training Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
-            print(f"Output shape {output.shape}")
-
-        loss = self.loss_function(output, labels)
-
-        predictions = torch.argmax(
-            output, dim=1, keepdim=True
-        )  # Assuming output is logits
-
-        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
+            print(f"outputs shape {outputs.shape}")
+        loss = self.dice_loss_function(outputs, labels)
+        tv_loss = self.tv_loss(outputs, labels)
+        onehot_predictions = convert_logits_to_one_hot(outputs)
+        dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
         # Log metrics
         self.log(
             "train_dice",
@@ -334,12 +335,21 @@ class Net(pytorch_lightning.LightningModule):
             sync_dist=self.multi_gpu,
             batch_size=self.batch_size,
         )
+        self.log(
+            "train_tv_loss",
+            tv_loss,
+            on_step=False,
+            on_epoch=True,
+            reduce_fx=torch.mean,
+            sync_dist=self.multi_gpu,
+            batch_size=self.batch_size,
+        )
 
         return loss
 
     def validation_step(self, batch, batch_idx):
         torch.no_grad()
-        images, labels = batch["image"], batch["label"]
+        images, labels = batch["image"].to(device), batch["label"].to(device)
         outputs = self.forward(images)
 
         if self.is_testing:
@@ -348,20 +358,18 @@ class Net(pytorch_lightning.LightningModule):
             print(f"Labels.Shape = {labels.shape}")
             print(f"Shape after post_pred: {outputs.shape}")
 
-        loss = self.loss_function(outputs, labels)
+        loss = self.dice_loss_function(outputs, labels)
+        tv_loss = self.tv_loss(outputs, labels)
+        onehot_predictions = convert_logits_to_one_hot(outputs)
         # Calculate accuracy, precision, recall, and F1 score
-        predictions = torch.argmax(
-            outputs, dim=1, keepdim=True
-        )  # Assuming output is logits
-
-        dice = self.dice_metric(y_pred=predictions, y=labels).mean()
-        haussdorf = self.hausdorff_metric(y_pred=predictions, y=labels).mean()
+        dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
+        haussdorf = self.hausdorff_metric(y_pred=onehot_predictions, y=labels).mean()
         surface_distance = self.surface_distance_metric(
-            y_pred=predictions, y=labels
+            y_pred=onehot_predictions, y=labels
         ).mean()
 
         if self.is_testing:
-            print(f"Predictions shape: {predictions.shape}")
+            print(f"Predictions shape: {outputs.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
             print(f"Surface Distance: {surface_distance}")
@@ -369,6 +377,14 @@ class Net(pytorch_lightning.LightningModule):
         self.log(
             name="haussdorf_distance",
             value=haussdorf,
+            on_step=False,
+            on_epoch=True,
+            batch_size=self.batch_size,
+            sync_dist=self.multi_gpu,
+        )
+        self.log(
+            name="tv_loss",
+            value=tv_loss,
             on_step=False,
             on_epoch=True,
             batch_size=self.batch_size,
@@ -415,47 +431,34 @@ class Net(pytorch_lightning.LightningModule):
         images = images.to(self.device)
         labels = labels.to(self.device)
 
+        # Onlys select the first image and label
+
         # Run the inference
         outputs = self.forward(images)
+        outputs = convert_logits_to_one_hot(outputs)
+
+        print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
         print(f"Output shape: {outputs.shape}")
         print(f"Labels shape: {labels.shape}")
         print(f"Images shape: {images.shape}")
-        print(f"Images min: {images.shape[:-3]}")
 
-        # center_slice = images.shape[0] //2
-        # images = images[0,:, center_slice, :, :]
-        # outputs = outputs[0,:, center_slice, :, :]
-        # TODO @joslin can you figure out why these are plotting incorrectly?
-        center_slice_idx = images.shape[4] // 2  # This will select the middle index of the depth dimension
+        monai.visualize.plot_2d_or_3d_image(
+            data=labels,
+            tag=f"Labels",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=outputs,
+            tag=f"Predictions",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
 
-        # Select the middle slice for images and labels, and remove the depth dimension
-        # The new shape should be (batch_size, channels, height, width)
-        images_2d = images[:, :, :, :, center_slice_idx]
-        labels_2d = labels[:, :, :, :, center_slice_idx]
-        images_2d = images_2d.expand(-1, 3, -1, -1)
-        labels_2d = labels_2d.expand(-1, 3, -1, -1)
-        images_2d = (images_2d - images_2d.min()) / (images_2d.max() - images_2d.min())
-        labels_2d = (labels_2d - labels_2d.min()) / (labels_2d.max() - labels_2d.min())
-
-        # Since you have a single channel, you might need to repeat it to make it 3 channels for RGB
-        # TensorBoard expects either 1 channel (grayscale) or 3 channels (RGB), but usually handles 1 channel correctly
-        if images_2d.shape[1] == 1:
-            images_2d = images_2d.repeat(1, 3, 1, 1)  # Repeat the single channel three times
-        if labels_2d.shape[1] == 1:
-            labels_2d = labels_2d.repeat(1, 3, 1, 1)
-
-        # Log the 2D images to TensorBoard
-        self.logger.experiment.add_images('Validation/Images', images_2d, self.current_epoch)
-        self.logger.experiment.add_images('Validation/Label', labels_2d, self.current_epoch)
-
-        # oneHotLabel = AsDiscrete(to_onehot=self.number_of_classes)(labels)
-        # img2tensorboard.plot_2d_or_3d_image(
-        #     writer=self.logger.experiment,
-        #     data=oneHotLabel,
-        #     step=self.current_epoch,
-        #     max_channels=self.number_of_classes,
-        #     tag="Validation/Prediction",
-        # )
         torch.enable_grad()
 
 
@@ -471,7 +474,7 @@ def train_model(
     activation: str,
     experiment_name: str,
     epochs: int,
-    reload_dataloaders_every_n_epochs: int = 10,
+    reload_dataloaders_every_n_epochs: int = 100,
     using_multi_gpu: bool = False,
     is_testing: bool = False,
 ):
@@ -547,18 +550,21 @@ def train_model(
 
 
 if __name__ == "__main__":
+    print("*" * 80)
+    print(f"Using device: {device}")
+    print("*" * 80)
     args = argparse.ArgumentParser()
     args.add_argument("--learning_rate", type=float, default=1e-3)
     args.add_argument("--batch_size", type=int, default=10)
     args.add_argument("--dropout_prob", type=float, default=0.2)
-    args.add_argument("--kernel_size", type=int, default=5)
-    args.add_argument("--kernel_upsample", type=int, default=5)
-    args.add_argument("--number_res_units", type=int, default=4)
-    args.add_argument("--strides", type=tuple, default=(2, 2, 2, 2))
-    args.add_argument("--channels", type=tuple, default=(16, 32, 128, 256))
+    args.add_argument("--kernel_size", type=int, default=3)
+    args.add_argument("--kernel_upsample", type=int, default=3)
+    args.add_argument("--number_res_units", type=int, default=5)
+    args.add_argument("--strides", type=tuple, default=(2, 2, 2, 1, 1))
+    args.add_argument("--channels", type=tuple, default=(16, 32, 64, 128, 256))
     args.add_argument("--activation", type=str, default="PReLU")
-    args.add_argument("--experiment_name", type=str, default="basic_unet")
-    args.add_argument("--epochs", type=int, default=3)
+    args.add_argument("--experiment_name", type=str, default="basic_unet_final_project")
+    args.add_argument("--epochs", type=int, default=1200)
     # args.add_argument("--using_multi_gpu", type=bool, default=False)
     # args.add_argument("--is_testing", type=bool, default=False)
     args = args.parse_args()

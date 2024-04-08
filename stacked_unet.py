@@ -280,20 +280,21 @@ class StackedNet(pytorch_lightning.LightningModule):
         torch.enable_grad()
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
-        # return optimizer
-        scheduler = ReduceLROnPlateau(
-            optimizer,
-            mode="min",
-            factor=0.1,
-            patience=10,
-            verbose=True,
-            monitor="val_loss",
-        )
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": scheduler,
-            "monitor": "val_loss",
-        }
+        return optimizer
+        # scheduler = ReduceLROnPlateau(
+        #     optimizer,
+        #     mode="min",
+        #     factor=0.1,5e-4
+        #     patience=10, 30
+        #     verbose=True,
+        #     monitor="val_loss",
+        # )
+        # return {
+        #     "optimizer": optimizer,
+        #     "lr_scheduler": scheduler,
+        #     "monitor": "val_loss",
+        # }
+
 
     def training_step(self, batch, batch_idx):
         """
@@ -553,15 +554,17 @@ def train_model(
 
 
 if __name__ == "__main__":
+
     args = argparse.ArgumentParser()
     args.add_argument("--learning_rate", type=float, default=1e-3)
     args.add_argument("--batch_size", type=int, default=10)
     args.add_argument("--dropout_prob", type=float, default=0.2)
-    args.add_argument("--kernel_size", type=int, default=5)
+    args.add_argument("--kernel_size", type=int, default=3)
     args.add_argument("--kernel_upsample", type=int, default=5)
     args.add_argument("--number_res_units", type=int, default=4)
-    args.add_argument("--strides", type=tuple, default=(2, 2, 2, 2))
-    args.add_argument("--channels", type=tuple, default=(16, 32, 128, 256))
+    args.add_argument("--strides", type=tuple, default=(2, 2, 2, 1, 1))
+
+    args.add_argument("--channels", type=tuple, default=(16, 32, 64, 128, 256))
     args.add_argument("--activation", type=str, default="PReLU")
     args.add_argument(
         "--experiment_name", type=str, default="basic_stacked_unet_stacked_labels"

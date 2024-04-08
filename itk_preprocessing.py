@@ -726,55 +726,7 @@ def weight_labels(data_path):
     print(weights)
 
 
-def visualize_labels():
-    # Load NIfTI image
-    image_path = "/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_prostate.nii.gz"
 
-    # Load NIfTI segmentation label
-    label_path = ("/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_segmentation"
-                  ".nii.gz")
-
-    # Load image and label data
-    image_data = nib.load(image_path).get_fdata()
-    label_data = nib.load(label_path).get_fdata()
-
-    # Define custom colormap for segmentation labels
-    # Map the label values to colors
-    label_colors = ListedColormap([
-        'black',  # Background (0)
-        'red',  # Peripheral Zone (1)
-        'green',  # Transition Zone (2)
-        'blue',  # Fibromuscular Stroma (3)
-        'yellow',  # Distal Prostatic Urethra (4)
-    ])
-
-    # The names of the labels
-    label_names = [
-        'Background',
-        'Peripheral Zone',
-        'Transition Zone',
-        'Fibromuscular Stroma',
-        'Distal Prostatic Urethra'
-    ]
-
-    # Display NIfTI image
-    slice_index = image_data.shape[2] // 2  # Index for the central slice
-    plt.figure(figsize=(8, 8))
-    plt.imshow(image_data[:, :, slice_index], cmap='gray')
-    plt.imshow(label_data[:, :, slice_index], cmap=label_colors, alpha=0.5)  # Overlay labels on central slice
-    plt.title('Segmentation Labels Overlay')
-    plt.axis('off')
-
-    # Create a colorbar with label names
-    colorbar = plt.colorbar(ticks=range(len(label_names)))
-    colorbar.set_ticklabels(label_names)
-
-    # Adjust colorbar height to match the figure
-    ax = plt.gca()
-    image_aspect = image_data.shape[0] / image_data.shape[1]
-    colorbar.ax.set_aspect(20.0 * image_aspect)
-
-    plt.show()
 
 
 if __name__ == "__main__":
