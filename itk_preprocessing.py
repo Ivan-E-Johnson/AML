@@ -336,7 +336,7 @@ def calculate_new_origin_from_center_of_mass(
 
 
 def get_recentered_image_from_center_of_mass(
-        mask: itk.Image,
+        image: itk.Image,
         center_of_mass: tuple[int, int, int],
         x_extent: int,
         y_extent: int,
@@ -346,7 +346,7 @@ def get_recentered_image_from_center_of_mass(
     IMAGE_TYPE = itk.Image[PIXEL_TYPE, 3]
     # Get the region from the bounding box
     region = itk.ImageRegion[3]()
-    direction = mask.GetDirection()
+    direction = image.GetDirection()
     direction.SetIdentity()
     size = itk.Size[3]()
     size[0] = x_extent
@@ -361,14 +361,14 @@ def get_recentered_image_from_center_of_mass(
 
     # Leave direction as identity
     new_image_origin = calculate_new_origin_from_center_of_mass(
-        center_of_mass, mask.GetSpacing(), size
+        center_of_mass, image.GetSpacing(), size
     )
 
     new_centered_image = IMAGE_TYPE.New()
     new_centered_image.SetRegions(region)
-    new_centered_image.SetSpacing(mask.GetSpacing())
+    new_centered_image.SetSpacing(image.GetSpacing())
     new_centered_image.SetOrigin(new_image_origin)
-    new_centered_image.SetDirection(mask.GetDirection())
+    new_centered_image.SetDirection(image.GetDirection())
     new_centered_image.Allocate()
 
     return new_centered_image

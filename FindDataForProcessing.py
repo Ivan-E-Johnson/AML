@@ -19,19 +19,23 @@ if __name__ == "__main__":
 
     subject_dirs = [x for x in prostatX_data.iterdir() if x.is_dir() and "ProstateX" in x.name]
     segmentation_dirs = [x for x in prostatX_segmentation_data.iterdir() if x.is_dir() and "ProstateX" in x.name]
+    segmentation_names = [x.name for x in segmentation_dirs]
+    subject_names = [x.name for x in subject_dirs]
 
 
 
-    for subject_dir in prostatX_data.iterdir():
-        has_corresponding_segmentation = subject_dir.name in segmentation_dirs # Check if the segmentation data exists
-        try:
-            volume_mapping = ProstatIDDicomStudyToVolumesMapping(subject_dir)
-        except Exception as e:
-            print(f"Error processing {subject_dir.name}: {e}")
-            continue
-        best_images: dict[str,itk.Image[itk.F,3]] = volume_mapping.get_best_inputs_images()
-        image_output_dir = default_output_dir / "RAW" / subject_dir.name
+    for subject_dir in subject_dirs:
+        has_corresponding_segmentation = subject_dir.name in segmentation_names
+         # Check if the segmentation data exists
         if has_corresponding_segmentation:
+            try:
+                volume_mapping = ProstatIDDicomStudyToVolumesMapping(subject_dir)
+            except Exception as e:
+                print(f"Error processing {subject_dir.name}: {e}")
+                continue
+            best_images: dict[str,itk.Image[itk.F,3]] = volume_mapping.get_best_inputs_images()
+            image_output_dir = default_output_dir / "RAW" / subject_dir.name
+
             segmentation_dicom_dir = prostatX_segmentation_data / subject_dir.name
             dcm_file_list = list(segmentation_dicom_dir.rglob("*.dcm"))
             itk_segmentation = itk_read_from_dicomfn_list(dcm_file_list)
@@ -42,12 +46,12 @@ if __name__ == "__main__":
 
             print(f"Segmentation output file: {segmentation_output_file}")
 
-        image_output_dir.mkdir(parents=True, exist_ok=True)
-        for image_name, image in best_images.items():
-            # print(f"Image name: {image_name}")
-            # print(f"Image: {image}")
-            output_file = image_output_dir / f"{subject_dir.name}_{image_name}.nii.gz"
-            itk.imwrite(image, output_file)
+
+            for image_name, image in best_images.items():
+                # print(f"Image name: {image_name}")
+                # print(f"Image: {image}")
+                output_file = image_output_dir / f"{subject_dir.name}_{image_name}.nii.gz"
+                itk.imwrite(image, output_file)
 
 
 
