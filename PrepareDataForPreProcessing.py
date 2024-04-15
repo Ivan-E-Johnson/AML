@@ -116,7 +116,7 @@ class SingleStudyStackedDataBase:
         # print(f"Study {self.study_path.name}:\tMean: {mean}, Std: {std}")
         subtract_filter = itk.SubtractImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
         subtract_filter.SetInput1(image_to_rescale)
-        subtract_filter.SetConstant1(mean)
+        subtract_filter.SetConstant2(mean)
         subtract_filter.Update()
         divide_filter = itk.DivideImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
         divide_filter.SetInput1(subtract_filter.GetOutput())
@@ -204,6 +204,6 @@ def preprocess_images(base_data_path: Path, output_path: Path, has_segmentation:
 
 
 if __name__ == "__main__":
-    base_data_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/RAW")
-    output_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed")
-    preprocess_images(base_data_path, output_path, has_segmentation=True)
+    base_data_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW")
+    output_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed")
+    preprocess_images(base_data_path, output_path, has_segmentation=False)
