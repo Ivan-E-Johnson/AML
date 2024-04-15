@@ -107,14 +107,23 @@ class SingleStudyStackedDataBase:
         multiply_filter.SetInput2(mask)
         multiply_filter.Update()
         return multiply_filter.GetOutput()
-    def _rescale_images_for_training(self, image_to_rescale: itk.Image[itk.F, 3]):
-        # Initialize the RescaleIntensityImageFilter
-        normalizer = itk.RescaleIntensityImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE].New()
-        normalizer.SetInput(image_to_rescale)
-        normalizer.SetOutputMinimum(0)
-        normalizer.SetOutputMaximum(1)
-        normalizer.Update()
-        return normalizer.GetOutput()
+    def _convert_images_to_zscore_images(self, image_to_rescale: itk.Image[itk.F, 3]):
+        stats = itk.StatisticsImageFilter[self.IMAGE_TYPE].New()
+        stats.SetInput(image_to_rescale)
+        stats.Update()
+        mean = stats.GetMean()
+        std = stats.GetSigma()
+        # print(f"Study {self.study_path.name}:\tMean: {mean}, Std: {std}")
+        subtract_filter = itk.SubtractImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
+        subtract_filter.SetInput1(image_to_rescale)
+        subtract_filter.SetConstant1(mean)
+        subtract_filter.Update()
+        divide_filter = itk.DivideImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
+        divide_filter.SetInput1(subtract_filter.GetOutput())
+        divide_filter.SetConstant2(std)
+        divide_filter.Update()
+        return divide_filter.GetOutput() # Z-score image
+
     def _find_mask_of_outliers(self, image: itk.Image[itk.F, 3], lower_threshold, upper_threshold):
         mask = itk.BinaryThresholdImageFilter[
             self.IMAGE_TYPE, self.IMAGE_TYPE
@@ -140,10 +149,10 @@ class SingleStudyStackedDataBase:
 
     def pre_process_images_for_training(self):
         resampled_t2w, resampled_adc, resampled_blow, resampled_tracew = self._get_all_resampled_images()
-        rescaled_t2w = self._rescale_images_for_training(resampled_t2w)
-        rescaled_adc = self._rescale_images_for_training(resampled_adc)
-        rescaled_blow = self._rescale_images_for_training(resampled_blow)
-        rescaled_tracew = self._rescale_images_for_training(resampled_tracew)
+        rescaled_t2w = self._convert_images_to_zscore_images(resampled_t2w)
+        rescaled_adc = self._convert_images_to_zscore_images(resampled_adc)
+        rescaled_blow = self._convert_images_to_zscore_images(resampled_blow)
+        rescaled_tracew = self._convert_images_to_zscore_images(resampled_tracew)
         return rescaled_t2w, rescaled_adc, rescaled_blow, rescaled_tracew
 
     def create_stacked_image(self):
