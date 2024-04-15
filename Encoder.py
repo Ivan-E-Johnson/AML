@@ -108,7 +108,7 @@ if __name__ == "__main__":
 
 
     logdir= "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/logs"
-
+    Path(logdir).mkdir(parents=True, exist_ok=True)
     print("item size:", images)
     print("CacheDataset: ", CacheDataset)
 
@@ -211,6 +211,10 @@ if __name__ == "__main__":
                 )
                 print("Input shape: {}".format(inputs.shape))
                 outputs, outputs_v2 = model(inputs)
+
+                # TODO Add visualization of the latent space
+
+
                 val_loss = recon_loss(outputs, gt_input)
                 total_val_loss += val_loss.item()
                 end_time = time.time()
