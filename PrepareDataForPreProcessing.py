@@ -3,8 +3,11 @@ import itk
 import numpy as np
 from tqdm import tqdm
 
-from itk_preprocessing import find_center_of_gravity_in_index_space, calculate_new_origin_from_center_of_mass, \
-    create_blank_image
+from itk_preprocessing import (
+    find_center_of_gravity_in_index_space,
+    calculate_new_origin_from_center_of_mass,
+    create_blank_image,
+)
 
 
 class SingleStudyStackedDataBase:
@@ -17,13 +20,13 @@ class SingleStudyStackedDataBase:
     IMAGE_TYPE = itk.Image[IMAGE_PIXEL_TYPE, 3]
     MASK_TYPE = itk.Image[MASK_PIXEL_TYPE, 3]
     VECTOR_IMAGE_TYPE = itk.VectorImage[IMAGE_PIXEL_TYPE, 3]
+
     def __init__(self, study_path: Path):
         self.study_path = study_path
         self.t2w_path = study_path / f"{study_path.name}_t2w.nii.gz"
         self.adc_path = study_path / f"{study_path.name}_adc.nii.gz"
         self.blow = study_path / f"{study_path.name}_b0low.nii.gz"
         self.tracew = study_path / f"{study_path.name}_tracew.nii.gz"
-
 
         self.t2w = itk.imread(self.t2w_path.as_posix())
         self.adc = itk.imread(self.adc_path.as_posix())
@@ -32,6 +35,7 @@ class SingleStudyStackedDataBase:
 
     def get_t2w_image(self):
         return self.t2w
+
     def get_adc_image(self):
         return self.adc
 
@@ -50,6 +54,7 @@ class SingleStudyStackedDataBase:
 
     def resample_coresponding_label(self, label: itk.Image[itk.UC, 3]):
         return self._resample_images_for_training(label)
+
     def _resample_images_for_training(self, image_to_resample: itk.Image[itk.F, 3]):
 
         # Get the center of mass of the mask
@@ -59,10 +64,14 @@ class SingleStudyStackedDataBase:
         # Get the new in plane spacing for the recentered image
         new_in_plane_spacing = self.x_y_fov / self.x_y_size
         new_out_of_plane_spacing = self.z_fov / self.z_size
-        new_spacing = [new_in_plane_spacing, new_in_plane_spacing, new_out_of_plane_spacing]
+        new_spacing = [
+            new_in_plane_spacing,
+            new_in_plane_spacing,
+            new_out_of_plane_spacing,
+        ]
 
-        center_of_mass_in_physical_space = self.get_t2w_image().TransformContinuousIndexToPhysicalPoint(
-            center_of_mass
+        center_of_mass_in_physical_space = (
+            self.get_t2w_image().TransformContinuousIndexToPhysicalPoint(center_of_mass)
         )
         print(f"Center of Mass in Physical Space: {center_of_mass_in_physical_space}")
         new_origin = calculate_new_origin_from_center_of_mass(
@@ -79,10 +88,14 @@ class SingleStudyStackedDataBase:
         )
         # Get the new spacing for the recentered image
 
-        linear_interpolator = itk.LinearInterpolateImageFunction[self.IMAGE_TYPE, itk.D].New()
+        linear_interpolator = itk.LinearInterpolateImageFunction[
+            self.IMAGE_TYPE, itk.D
+        ].New()
         identity_transform = itk.IdentityTransform[itk.D, 3].New()
         # Initialize the ResampleImageFilter
-        itk_t2w_resampler = itk.ResampleImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE].New()
+        itk_t2w_resampler = itk.ResampleImageFilter[
+            self.IMAGE_TYPE, self.IMAGE_TYPE
+        ].New()
         itk_t2w_resampler.SetInput(image_to_resample)
         itk_t2w_resampler.SetReferenceImage(new_image_blank)
         itk_t2w_resampler.SetTransform(identity_transform)
@@ -92,21 +105,31 @@ class SingleStudyStackedDataBase:
         itk_t2w_resampler.Update()
         resampled_image = itk_t2w_resampler.GetOutput()
         return resampled_image
-    def _fill_outliers_with_median(self, image: itk.Image[itk.F, 3], radius: list[int, int, int]):
-        lower_percentile = .1
-        upper_percentile = .99
+
+    def _fill_outliers_with_median(
+        self, image: itk.Image[itk.F, 3], radius: list[int, int, int]
+    ):
+        lower_percentile = 0.1
+        upper_percentile = 0.99
 
         lower_threshold = np.quantile(itk.GetArrayFromImage(image), lower_percentile)
         upper_threshold = np.quantile(itk.GetArrayFromImage(image), upper_percentile)
-        print(f"Study {self.study_path.name}:\tLower Threshold: {lower_threshold}, Upper Threshold: {upper_threshold}")
+        print(
+            f"Study {self.study_path.name}:\tLower Threshold: {lower_threshold}, Upper Threshold: {upper_threshold}"
+        )
         median_image = self._calculate_median_image(image, radius)
-        mask = self._find_mask_of_outliers(median_image, lower_threshold, upper_threshold)
+        mask = self._find_mask_of_outliers(
+            median_image, lower_threshold, upper_threshold
+        )
 
-        multiply_filter = itk.MultiplyImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
+        multiply_filter = itk.MultiplyImageFilter[
+            self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE
+        ].New()
         multiply_filter.SetInput1(image)
         multiply_filter.SetInput2(mask)
         multiply_filter.Update()
         return multiply_filter.GetOutput()
+
     def _convert_images_to_zscore_images(self, image_to_rescale: itk.Image[itk.F, 3]):
         stats = itk.StatisticsImageFilter[self.IMAGE_TYPE].New()
         stats.SetInput(image_to_rescale)
@@ -114,20 +137,24 @@ class SingleStudyStackedDataBase:
         mean = stats.GetMean()
         std = stats.GetSigma()
         # print(f"Study {self.study_path.name}:\tMean: {mean}, Std: {std}")
-        subtract_filter = itk.SubtractImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
+        subtract_filter = itk.SubtractImageFilter[
+            self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE
+        ].New()
         subtract_filter.SetInput1(image_to_rescale)
         subtract_filter.SetConstant2(mean)
         subtract_filter.Update()
-        divide_filter = itk.DivideImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE].New()
+        divide_filter = itk.DivideImageFilter[
+            self.IMAGE_TYPE, self.IMAGE_TYPE, self.IMAGE_TYPE
+        ].New()
         divide_filter.SetInput1(subtract_filter.GetOutput())
         divide_filter.SetConstant2(std)
         divide_filter.Update()
-        return divide_filter.GetOutput() # Z-score image
+        return divide_filter.GetOutput()  # Z-score image
 
-    def _find_mask_of_outliers(self, image: itk.Image[itk.F, 3], lower_threshold, upper_threshold):
-        mask = itk.BinaryThresholdImageFilter[
-            self.IMAGE_TYPE, self.IMAGE_TYPE
-        ].New()
+    def _find_mask_of_outliers(
+        self, image: itk.Image[itk.F, 3], lower_threshold, upper_threshold
+    ):
+        mask = itk.BinaryThresholdImageFilter[self.IMAGE_TYPE, self.IMAGE_TYPE].New()
         mask.SetInput(image)
         mask.SetLowerThreshold(lower_threshold)
         mask.SetUpperThreshold(upper_threshold)
@@ -135,8 +162,9 @@ class SingleStudyStackedDataBase:
         mask.SetInsideValue(0)
         mask.Update()
         return mask.GetOutput()
+
     def _calculate_median_image(
-            self, img: itk.Image[itk.F, 3], radius: list[int, int, int]
+        self, img: itk.Image[itk.F, 3], radius: list[int, int, int]
     ) -> itk.Image[itk.F, 3]:
         median_image_filter = itk.MedianImageFilter[
             itk.Image[itk.F, 3], itk.Image[itk.F, 3]
@@ -146,9 +174,10 @@ class SingleStudyStackedDataBase:
         median_image_filter.Update()
         return median_image_filter.GetOutput()
 
-
     def pre_process_images_for_training(self):
-        resampled_t2w, resampled_adc, resampled_blow, resampled_tracew = self._get_all_resampled_images()
+        resampled_t2w, resampled_adc, resampled_blow, resampled_tracew = (
+            self._get_all_resampled_images()
+        )
         rescaled_t2w = self._convert_images_to_zscore_images(resampled_t2w)
         rescaled_adc = self._convert_images_to_zscore_images(resampled_adc)
         rescaled_blow = self._convert_images_to_zscore_images(resampled_blow)
@@ -168,7 +197,9 @@ class SingleStudyStackedDataBase:
         return ImageToVectorImageFilterType.GetOutput()
 
 
-def preprocess_images(base_data_path: Path, output_path: Path, has_segmentation: bool = False):
+def preprocess_images(
+    base_data_path: Path, output_path: Path, has_segmentation: bool = False
+):
     """
     This function initializes the image and mask paths.
 
@@ -197,13 +228,22 @@ def preprocess_images(base_data_path: Path, output_path: Path, has_segmentation:
                 segmentation_path = dir / f"{dir.name}_Segmentation.nii.gz"
                 segmentation = itk.imread(segmentation_path.as_posix())
                 pp_segmentation = study.resample_coresponding_label(segmentation)
-                itk.imwrite(pp_segmentation, subject_output_dir / f"{dir.name}_pp_segmentation.nii.gz")
+                itk.imwrite(
+                    pp_segmentation,
+                    subject_output_dir / f"{dir.name}_pp_segmentation.nii.gz",
+                )
 
             stacked_image = study.create_stacked_image()
-            itk.imwrite(stacked_image, subject_output_dir / f"{dir.name}_stacked_image.nii.gz")
+            itk.imwrite(
+                stacked_image, subject_output_dir / f"{dir.name}_stacked_image.nii.gz"
+            )
 
 
 if __name__ == "__main__":
-    base_data_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW")
-    output_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed")
+    base_data_path = Path(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW"
+    )
+    output_path = Path(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
+    )
     preprocess_images(base_data_path, output_path, has_segmentation=False)

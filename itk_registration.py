@@ -69,10 +69,10 @@ def find_renamed_images(sorted_prostate_path: Path, bi_prostatex_path: Path):
         #     given_t2w_path, given_mask_path, adc_path, tracew_path, subject_output_path
         # )
         pre_processed_t2w_path = (
-                subject_output_path / f"{actual_name}_resampled_normalized_t2w.nii.gz"
+            subject_output_path / f"{actual_name}_resampled_normalized_t2w.nii.gz"
         )
         pre_processed_mask_path = (
-                subject_output_path / f"{actual_name}_resampled_segmentations.nii.gz"
+            subject_output_path / f"{actual_name}_resampled_segmentations.nii.gz"
         )
         resampled_image, resampled_mask = resample_images_for_training(
             given_t2w_image, given_mask_image
@@ -123,7 +123,7 @@ def apply_transfrom_to_image(moving_image, transform):
 
 
 def run_study_registration(
-        t2w_orig_path, mask_orig_path, adc_bi_path, tracew_bi_path, output_folder
+    t2w_orig_path, mask_orig_path, adc_bi_path, tracew_bi_path, output_folder
 ):
     temp_dir = output_folder / "registration_tempfiles"
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -169,11 +169,11 @@ def run_study_registration(
             itk.imwrite(
                 mi_fixed_mask_image,
                 temp_dir / "mi_fixed_mask_image.nii.gz",
-                )
+            )
             itk.imwrite(
                 non_zero_moving_mask,
                 temp_dir / "non_zero_moving_mask.nii.gz",
-                )
+            )
             itk.imwrite(fixed_image, temp_dir / "fixed_image.nii.gz")
             itk.imwrite(moving_image, temp_dir / "moving_image.nii.gz")
             euler3d_transform = run_optimizer_for_mmi_metric(

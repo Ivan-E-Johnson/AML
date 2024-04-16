@@ -199,7 +199,6 @@ class Net(pytorch_lightning.LightningModule):
     validation_step_outputs (list): The outputs of the validation step.
     """
 
-
     # TEST OUT
     # Shallow Progression (16, 24, 48, 96, 192)
     # Default Progression (16, 32, 64, 128, 256)
@@ -218,7 +217,6 @@ class Net(pytorch_lightning.LightningModule):
         kernel_size: int = 3,
         kernel_upsample: int = 3,
         is_testing=False,
-
     ):
 
         super().__init__()
@@ -488,18 +486,16 @@ class Net(pytorch_lightning.LightningModule):
 
         iou = self.iou_metric(predictions, labels)
 
-
         if self.is_testing:
             print(f"Predictions shape: {predictions.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
             print(f"Surface Distance: {surface_distance}")
 
-
         if self.best_val_dice < dice:
             self.best_val_dice = dice
             self.best_val_epoch = self.current_epoch
-            
+
         self.log(
             name="iou",
             value=iou,
@@ -684,7 +680,6 @@ class BestModelCheckpoint(pytorch_lightning.callbacks.Callback):
                     trainer.save_checkpoint(checkpoint_callback.best_model_path)
 
 
-
 def do_main(
     learning_rate,
     batch_size,
@@ -730,7 +725,6 @@ def do_main(
     )
     trainer = pytorch_lightning.Trainer(
         max_epochs=epocs,
-
         logger=tb_logger,
         accelerator="cpu",
         # devices=[0],

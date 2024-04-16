@@ -15,15 +15,30 @@ from monai.utils import set_determinism, first
 from monai.data import FolderLayout
 
 from monai.data import PatchIter, GridPatchDataset, DataLoader, CacheDataset
-from monai.transforms import Compose, DataStatsD, EnsureChannelFirstD, ToTensord, EnsureChannelFirstd, CropForegroundd, \
-    RandSpatialCropSamplesd, RandCoarseDropoutd, OneOf, RandCoarseShuffled, CopyItemsd, SaveImageD, LoadImageD
+from monai.transforms import (
+    Compose,
+    DataStatsD,
+    EnsureChannelFirstD,
+    ToTensord,
+    EnsureChannelFirstd,
+    CropForegroundd,
+    RandSpatialCropSamplesd,
+    RandCoarseDropoutd,
+    OneOf,
+    RandCoarseShuffled,
+    CopyItemsd,
+    SaveImageD,
+    LoadImageD,
+)
 from sklearn.model_selection import train_test_split
 from torch.nn import L1Loss
 
 from support_functions import *
 
 
-def _create_dict_of_preprocessed_unlabeled_data(base_data_path: Path, is_testing:bool = False)-> list:
+def _create_dict_of_preprocessed_unlabeled_data(
+    base_data_path: Path, is_testing: bool = False
+) -> list:
     data_dicts = []
 
     for dir in base_data_path.iterdir():
@@ -37,6 +52,8 @@ def _create_dict_of_preprocessed_unlabeled_data(base_data_path: Path, is_testing
     if is_testing:
         data_dicts = data_dicts[:10]
     return data_dicts
+
+
 def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
     data_dicts = []
     for dir in base_data_path.iterdir():
@@ -46,16 +63,18 @@ def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
         data_dicts = data_dicts[:10]
     return data_dicts
 
+
 layout = FolderLayout(
     output_dir="/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/Patched/",
     postfix="train_transformed",
     parent=True,
     extension="nii.gz",
-    makedirs=True)
+    makedirs=True,
+)
 
 
 image_size = (240, 240, 16)
-patch_size = (16,16,16)
+patch_size = (16, 16, 16)
 # num_samples = 240 // 60 * 240 // 60 * 16 // 4
 num_samples = 4**3
 train_transforms = Compose(
@@ -68,46 +87,64 @@ train_transforms = Compose(
         # CropForegroundd(keys=["image"], source_key="image", k_divisible=4),
         # RandSpatialCropSamplesd(keys=["image"], roi_size=patch_size, random_size=False),
         DataStatsD(keys=["image"]),
-        CopyItemsd(keys=["image"], times=2, names=["reference_patched", "contrastive_patched"], allow_missing_keys=False),
+        CopyItemsd(
+            keys=["image"],
+            times=2,
+            names=["reference_patched", "contrastive_patched"],
+            allow_missing_keys=False,
+        ),
         OneOf(
             transforms=[
                 RandCoarseDropoutd(
-                    keys=["contrastive_patched"], prob=1.0, holes=6, spatial_size=5, dropout_holes=True, max_spatial_size=32
+                    keys=["contrastive_patched"],
+                    prob=1.0,
+                    holes=6,
+                    spatial_size=5,
+                    dropout_holes=True,
+                    max_spatial_size=32,
                 ),
                 RandCoarseDropoutd(
-                    keys=["contrastive_patched"], prob=1.0, holes=6, spatial_size=20, dropout_holes=False, max_spatial_size=64
+                    keys=["contrastive_patched"],
+                    prob=1.0,
+                    holes=6,
+                    spatial_size=20,
+                    dropout_holes=False,
+                    max_spatial_size=64,
                 ),
             ]
         ),
-        RandCoarseShuffled(keys=["contrastive_patched"], prob=0.8, holes=10, spatial_size=8),
+        RandCoarseShuffled(
+            keys=["contrastive_patched"], prob=0.8, holes=10, spatial_size=8
+        ),
         # SaveImageD(keys=["contrastive_patched"], folder_layout=layout),
     ]
 )
 
 
-
 if __name__ == "__main__":
-    base_data_path = Path("/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed")
+    base_data_path = Path(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
+    )
     print(f"Base data path: {base_data_path}")
     data_dicts = _create_image_dict(base_data_path, is_testing=True)
-    train_image_paths, test_image_paths= (
-        train_test_split(data_dicts, test_size=0.2)
-    )
+    train_image_paths, test_image_paths = train_test_split(data_dicts, test_size=0.2)
 
     print(f"Data dicts: {data_dicts}")
 
-    cache_dataset = CacheDataset(data=train_image_paths, transform=train_transforms,
-                                 cache_rate=1.0, num_workers=2)
+    cache_dataset = CacheDataset(
+        data=train_image_paths,
+        transform=train_transforms,
+        cache_rate=1.0,
+        num_workers=2,
+    )
     val_cache_dataset = CacheDataset(data=test_image_paths, transform=train_transforms)
     images = first(cache_dataset)
-    val_loader = DataLoader(val_cache_dataset, batch_size=4, shuffle=True, num_workers=2)
+    val_loader = DataLoader(
+        val_cache_dataset, batch_size=4, shuffle=True, num_workers=2
+    )
     train_loader = DataLoader(cache_dataset, batch_size=4, shuffle=True, num_workers=2)
 
-
-
-
-
-    logdir= "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/logs"
+    logdir = "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/logs"
     Path(logdir).mkdir(parents=True, exist_ok=True)
     print("item size:", images)
     print("CacheDataset: ", CacheDataset)
@@ -158,7 +195,7 @@ if __name__ == "__main__":
                 batch_data["contrastive_patched"].to(device),
                 batch_data["reference_patched"].to(device),
             )
-            print(f'I1: {inputs.shape}, I2: {inputs_2.shape}, GT: {gt_input.shape}')
+            print(f"I1: {inputs.shape}, I2: {inputs_2.shape}, GT: {gt_input.shape}")
             optimizer.zero_grad()
             outputs_v1, hidden_v1 = model(inputs)
             outputs_v2, hidden_v2 = model(inputs_2)
@@ -215,7 +252,6 @@ if __name__ == "__main__":
 
                 # TODO Add visualization of the latent space
 
-
                 val_loss = recon_loss(outputs, gt_input)
                 total_val_loss += val_loss.item()
                 end_time = time.time()
@@ -223,13 +259,18 @@ if __name__ == "__main__":
             total_val_loss /= val_step
             val_loss_values.append(total_val_loss)
             print(
-                f"epoch {epoch + 1} Validation avg loss: {total_val_loss:.4f}, " f"time taken: {end_time - start_time}s")
+                f"epoch {epoch + 1} Validation avg loss: {total_val_loss:.4f}, "
+                f"time taken: {end_time - start_time}s"
+            )
 
             if total_val_loss < best_val_loss:
                 print(f"Saving new model based on validation loss {total_val_loss:.4f}")
                 best_val_loss = total_val_loss
-                checkpoint = {"epoch": max_epochs, "state_dict": model.state_dict(),
-                              "optimizer": optimizer.state_dict()}
+                checkpoint = {
+                    "epoch": max_epochs,
+                    "state_dict": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                }
                 torch.save(checkpoint, os.path.join(logdir, "best_model.pt"))
 
             plt.figure(1, figsize=(8, 8))

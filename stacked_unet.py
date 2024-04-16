@@ -295,7 +295,6 @@ class StackedNet(pytorch_lightning.LightningModule):
         #     "monitor": "val_loss",
         # }
 
-
     def training_step(self, batch, batch_idx):
         """
         This function defines the training step.
