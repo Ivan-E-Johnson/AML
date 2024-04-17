@@ -146,16 +146,34 @@ class MAEViTAutoEnc(ViTAutoEnc):
 
         return self.masked_tensor, self.unmasked_tensor
 
+
     def reconstruct_image(self, normalized_x):
         batch_size = normalized_x.shape[0]
+        reconstructed_images = []
 
-        batched_masked_patches = self.masked_tensor
-        for i in range(batch_size - 1):
-            batched_masked_patches = torch.cat(
-                (batched_masked_patches, self.masked_tensor), 0
+        # Repeat the masked patches for each sample in the batch
+        masked_patches = self.masked_tensor.repeat(batch_size, 1, 1)
+
+        for i in range(batch_size):
+            # Get the normalized output for the current sample
+            normalized_output = normalized_x[i]
+            # Concatenate the normalized output with the corresponding masked patches
+            concatenated_output = torch.cat((normalized_output, masked_patches[i]), dim=1)
+
+            # Transpose the concatenated output to match the original shape
+            concatenated_output = concatenated_output.transpose(1, 2)
+
+            # Perform reshaping to obtain the reconstructed image
+            spatial_size = self.masked_tensor.shape[1:]
+            d = [s // p for s, p in zip(spatial_size, self.patch_size)]
+            reconstructed_image = torch.reshape(
+                concatenated_output, [1, concatenated_output.shape[1], *d]
             )
 
-        # Create a tensor we can use to reconstruct the image
-        # TODO Figure out how to reconstruct the image from the masked patches and the
-        #  normalized output of the transformer blocks
-        # THEY MUST GO IN THE SAME ORDER BUT MUST BE RANDOMLY SELECTED
+            # Append the reconstructed image to the list
+            reconstructed_images.append(reconstructed_image)
+
+        # Concatenate the reconstructed images along the batch dimension
+        reconstructed_images = torch.cat(reconstructed_images, dim=0)
+
+        return reconstructed_images
