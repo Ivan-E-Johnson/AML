@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 from monai.data import DataLoader, CacheDataset
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
-from testing import MAEViTAutoEnc
+from mae_vit_model import MAEViTAutoEnc
 from monai.networks.nets import ViTAutoEnc
 import torch.nn as nn
 from monai.losses import ContrastiveLoss
