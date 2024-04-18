@@ -163,11 +163,11 @@ class MAEViTAutoEnc(ViTAutoEnc):
 class MaskMapper:
     # TODO's are organized Highest Priority to Lowest Priority @ Joslin
     # TODO Make Sure that reconstructed image is valid and has the same shape as the original image
-    # TODO This class is a bit of a hack. It should be refactored to be more general and possibly moved into the Autoencoder class
     # TODO Figure out L1 loss and Contrastive Loss and make a tldr for the team
     # TODO make the env file example and update the Encoder to use the .env file
     # TODO Test to see if we can use the stacked images as the input to the model -- I will probably end up doing this
     # TODO Figure out where the "latent space" is and how to get it / visualize it
+    # TODO This class is a bit of a hack. It should be refactored to be more general and possibly moved into the Autoencoder class
 
     def __init__(self, mask_rate: float, number_of_patch_tensors: int):
         self.mask_rate = mask_rate
@@ -210,7 +210,7 @@ class MaskMapper:
 
     def reconstruct_image(self, normalized_x, orig_tensor):
         batch_dim = normalized_x.shape[0]
-        if self.masked_tensor.shape[0] != batch_dim:
+        if self.masked_tensor.shape[0] != batch_dim:  # CHECK THAT THE
             raise ValueError(
                 "The batch dimension of the masked tensor and the normalized tensor must be the same"
             )
