@@ -18,6 +18,7 @@ import os
 
 load_dotenv()
 
+
 def show_subject_images(image: itk.Image, mask: itk.Image):
     # Convert the images to numpy arrays
     image_np = itk.GetArrayViewFromImage(image)
@@ -43,7 +44,7 @@ def init_data_lists(base_data_path):
 
 
 def get_mask_bounding_box(
-        mask: itk.Image, label: int
+    mask: itk.Image, label: int
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     # Initialize the LabelStatisticsImageFilter
     stats_filter = itk.LabelStatisticsImageFilter.New(Input=mask, LabelInput=mask)
@@ -197,7 +198,7 @@ def simple_otsu_thresholding(image: itk.Image) -> itk.Image:
 
 
 def multi_otsu_thresholding(
-        image: itk.Image, number_of_thresholds: int, number_of_histogram_bins: int
+    image: itk.Image, number_of_thresholds: int, number_of_histogram_bins: int
 ) -> itk.Image:
     # Initialize the OtsuThresholdImageFilter
     uc_image = rescale_and_cast_to_unsigned_char(image)
@@ -210,17 +211,17 @@ def multi_otsu_thresholding(
 
 
 def calculate_distance_between_points(
-        point1: tuple[int, int, int], point2: tuple[int, int, int]
+    point1: tuple[int, int, int], point2: tuple[int, int, int]
 ) -> float:
     x_distance = point1[0] - point2[0]
     y_distance = point1[1] - point2[1]
     z_distance = point1[2] - point2[2]
-    distance = (x_distance ** 2 + y_distance ** 2 + z_distance ** 2) ** 0.5
+    distance = (x_distance**2 + y_distance**2 + z_distance**2) ** 0.5
     return distance
 
 
 def plot_dict_images(
-        threshold_dict: dict, center_dict: dict, true_center: tuple[int, int, int]
+    threshold_dict: dict, center_dict: dict, true_center: tuple[int, int, int]
 ):
     SAVE_IMAGES = False
 
@@ -303,7 +304,7 @@ def compare_average_center_of_mass(base_data_path):
 
         # Multi Otsu thresholding
         for threshold, histogram in itertools.product(
-                thresholding_list, histogram_list
+            thresholding_list, histogram_list
         ):
             if threshold >= histogram:
                 continue
@@ -324,29 +325,29 @@ def compare_average_center_of_mass(base_data_path):
 
 
 def calculate_new_origin_from_center_of_mass(
-        center_of_mass_in_phsyical_space: tuple[float, float, float], spacing, size
+    center_of_mass_in_phsyical_space: tuple[float, float, float], spacing, size
 ):
     return (
-            np.array(center_of_mass_in_phsyical_space)
-            - (
-                    np.array([(size[0] / 2 - 1), (size[1] / 2 - 1), (size[2] / 2 - 1)])
-                    * np.array(spacing)
-            ).tolist()
+        np.array(center_of_mass_in_phsyical_space)
+        - (
+            np.array([(size[0] / 2 - 1), (size[1] / 2 - 1), (size[2] / 2 - 1)])
+            * np.array(spacing)
+        ).tolist()
     )
 
 
 def get_recentered_image_from_center_of_mass(
-        mask: itk.Image,
-        center_of_mass: tuple[int, int, int],
-        x_extent: int,
-        y_extent: int,
-        z_extent: int,
+    image: itk.Image,
+    center_of_mass: tuple[int, int, int],
+    x_extent: int,
+    y_extent: int,
+    z_extent: int,
 ):
     PIXEL_TYPE = itk.UC
     IMAGE_TYPE = itk.Image[PIXEL_TYPE, 3]
     # Get the region from the bounding box
     region = itk.ImageRegion[3]()
-    direction = mask.GetDirection()
+    direction = image.GetDirection()
     direction.SetIdentity()
     size = itk.Size[3]()
     size[0] = x_extent
@@ -361,14 +362,14 @@ def get_recentered_image_from_center_of_mass(
 
     # Leave direction as identity
     new_image_origin = calculate_new_origin_from_center_of_mass(
-        center_of_mass, mask.GetSpacing(), size
+        center_of_mass, image.GetSpacing(), size
     )
 
     new_centered_image = IMAGE_TYPE.New()
     new_centered_image.SetRegions(region)
-    new_centered_image.SetSpacing(mask.GetSpacing())
+    new_centered_image.SetSpacing(image.GetSpacing())
     new_centered_image.SetOrigin(new_image_origin)
-    new_centered_image.SetDirection(mask.GetDirection())
+    new_centered_image.SetDirection(image.GetDirection())
     new_centered_image.Allocate()
 
     return new_centered_image
@@ -546,14 +547,14 @@ def pre_process_images(base_data_path: Path):
         resampled_image, resampled_mask = resample_images_for_training(image, mask)
         resampled_normalized_image = normalize_t2w_images(resampled_image)
         resampled_output_path = (
-                output_data_path
-                / subject_name
-                / f"{subject_name}_resampled_normalized_t2w.nii.gz"
+            output_data_path
+            / subject_name
+            / f"{subject_name}_resampled_normalized_t2w.nii.gz"
         )
         resampled_mask_path = (
-                output_data_path
-                / subject_name
-                / f"{subject_name}_resampled_segmentations.nii.gz"
+            output_data_path
+            / subject_name
+            / f"{subject_name}_resampled_segmentations.nii.gz"
         )
         assert np.unique(itk.GetArrayViewFromImage(resampled_mask)).size == 5
         resampled_output_path.parent.mkdir(exist_ok=True, parents=True)
@@ -662,37 +663,42 @@ def get_label_percentage(image_path, label_path):
     # label_path = ("/home/jsome/PycharmProjects/AML/DATA/SortedProstateData/ProstateX-0004/ProstateX-0004_segmentation"
     #               ".nii.gz")
 
-
     # Load image and label data
     image_data = nib.load(image_path).get_fdata()
     label_data = nib.load(label_path).get_fdata()
     weight_dict = {}
     # Define custom colormap for segmentation labels
     # Map the label values to colors
-    label_colors = ListedColormap([
-        'black',  # Background (0)
-        'red',  # Peripheral Zone (1)
-        'green',  # Transition Zone (2)
-        'blue',  # Fibromuscular Stroma (3)
-        'yellow',  # Distal Prostatic Urethra (4)
-    ])
+    label_colors = ListedColormap(
+        [
+            "black",  # Background (0)
+            "red",  # Peripheral Zone (1)
+            "green",  # Transition Zone (2)
+            "blue",  # Fibromuscular Stroma (3)
+            "yellow",  # Distal Prostatic Urethra (4)
+        ]
+    )
 
     # Label names mapped to their respective numbers
     label_names = {
-        0: 'Background',
-        1: 'Peripheral Zone',
-        2: 'Transition Zone',
-        3: 'Fibromuscular Stroma',
-        4: 'Distal Prostatic Urethra'
+        0: "Background",
+        1: "Peripheral Zone",
+        2: "Transition Zone",
+        3: "Fibromuscular Stroma",
+        4: "Distal Prostatic Urethra",
     }
 
     # Calculate the total number of pixels per slice (for 2D image slice)
     total_pixels_per_slice = label_data.shape[0] * label_data.shape[1]
 
     # Calculate the percentage of each label
-    unique, counts = np.unique(label_data[:, :, image_data.shape[2] // 2], return_counts=True)
-    label_percentages = {label_names[label]: (count / total_pixels_per_slice) * 100 for label, count in
-                         zip(unique, counts)}
+    unique, counts = np.unique(
+        label_data[:, :, image_data.shape[2] // 2], return_counts=True
+    )
+    label_percentages = {
+        label_names[label]: (count / total_pixels_per_slice) * 100
+        for label, count in zip(unique, counts)
+    }
 
     # Print out the percentages with label names
     print("Percentage of each label in the central slice:")
@@ -700,42 +706,39 @@ def get_label_percentage(image_path, label_path):
         print(f"{label_name}: {percentage:.2f}%")
         weight_dict[label_name] = percentage
     return weight_dict
+
+
 def weight_labels(data_path):
 
-    image_path: str =""
-    label_path: str =""
-    weights = defaultdict(lambda : 0.0)
+    image_path: str = ""
+    label_path: str = ""
+    weights = defaultdict(lambda: 0.0)
     subject_count = 0
     for filename in os.listdir(data_path):
         subject = os.path.join(data_path, filename)
-        #check if is directory
+        # check if is directory
         if os.path.isdir(subject):
             for file in os.listdir(subject):
                 if file.endswith("segmentation.nii.gz"):
-                    #grab label info
+                    # grab label info
                     label_path = os.path.join(subject, file)
                 if file.endswith("prostate.nii.gz"):
-                    #grab image info
+                    # grab image info
                     image_path = os.path.join(subject, file)
-            subject_weights = get_label_percentage(image_path,label_path)
+            subject_weights = get_label_percentage(image_path, label_path)
             subject_count += 1
             for key in subject_weights.keys():
                 weights[key] += subject_weights[key]
     for key in weights.keys():
-        weights[key] = weights[key]/subject_count
+        weights[key] = weights[key] / subject_count
     print(weights)
-
-
-
 
 
 if __name__ == "__main__":
     # base_data_path = Path(
     #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/SortedProstateData"
     # )
-    base_data_path = Path(
-        os.environ.get("SortedProstateData")
-    )
+    base_data_path = Path(os.environ.get("SortedProstateData"))
     # find_largest_needed_region_for_prostate(base_data_path)
     # compare_average_center_of_mass(base_data_path)
     pre_process_images(base_data_path)
