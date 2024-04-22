@@ -31,7 +31,6 @@ import os
 load_dotenv()
 
 
-
 def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
     data_dicts = []
     for dir in base_data_path.iterdir():
@@ -70,9 +69,7 @@ class LitAutoEncoder(pl.LightningModule):
         self.lr = lr
 
         # base_data_path = Path(os.enviorn["DATA_PATH"])
-        base_data_path = Path(
-            os.getenv("DATA_PATH")
-        )
+        base_data_path = Path(os.getenv("DATA_PATH"))
         data_dicts = _create_image_dict(base_data_path, is_testing=True)
         train_image_paths, test_image_paths = train_test_split(
             data_dicts, test_size=0.2
@@ -100,10 +97,6 @@ class LitAutoEncoder(pl.LightningModule):
                 LoadImageD(keys=["image"], image_only=False),
                 DataStatsD(keys=["image"]),
                 EnsureChannelFirstd(keys=["image"]),
-                # DataStatsD(keys=["image"]),
-                # CropForegroundd(keys=["image"], source_key="image", k_divisible=4),
-                # RandSpatialCropSamplesd(keys=["image"], roi_size=patch_size, random_size=False),
-                # DataStatsD(keys=["image"]),
                 CopyItemsd(
                     keys=["image"],
                     times=2,

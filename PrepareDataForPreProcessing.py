@@ -11,10 +11,10 @@ from itk_preprocessing import (
 
 
 class SingleStudyStackedDataBase:
-    x_y_size = 240  # Index
-    z_size = 16  # Index
-    x_y_fov = 120  # mm
-    z_fov = 70  # mm
+    x_y_size = 320  # Index
+    z_size = 64  # Index
+    x_y_fov = 160  # mm
+    z_fov = 160  # mm
     IMAGE_PIXEL_TYPE = itk.F
     MASK_PIXEL_TYPE = itk.UC
     IMAGE_TYPE = itk.Image[IMAGE_PIXEL_TYPE, 3]
@@ -225,7 +225,7 @@ def preprocess_images(
             itk.imwrite(pp_tracew, subject_output_dir / f"{dir.name}_pp_tracew.nii.gz")
 
             if has_segmentation:
-                segmentation_path = dir / f"{dir.name}_Segmentation.nii.gz"
+                segmentation_path = dir / f"{dir.name}_segmentation.nii.gz"
                 segmentation = itk.imread(segmentation_path.as_posix())
                 pp_segmentation = study.resample_coresponding_label(segmentation)
                 itk.imwrite(
@@ -241,9 +241,9 @@ def preprocess_images(
 
 if __name__ == "__main__":
     base_data_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW"
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/RAW"
     )
     output_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed"
     )
     preprocess_images(base_data_path, output_path, has_segmentation=False)
