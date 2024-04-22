@@ -53,21 +53,23 @@ if __name__ == "__main__":
             volume_mapping.get_best_inputs_images()
         )
         image_output_dir = default_output_dir / "RAW" / subject_dir.name
-        image_output_dir.mkdir(parents=True, exist_ok=True)
+
         if has_corresponding_segmentation:
             segmentation_dicom_dir = prostatX_segmentation_data / subject_dir.name
+            image_output_dir = with_segmentation_output_dir / "RAW" / subject_dir.name
             dcm_file_list = list(segmentation_dicom_dir.rglob("*.dcm"))
             itk_segmentation = itk_read_from_dicomfn_list(dcm_file_list)
             segmentation_output_file = (
                 image_output_dir / f"{subject_dir.name}_segmentation.nii.gz"
             )
             itk_segmentation = resample_image_to_reference(
-                image=itk_segmentation, reference_image=best_images["t2w"]
+                image=itk_segmentation, reference_image=best_images.get("t2w")
             )
+            image_output_dir.mkdir(parents=True, exist_ok=True)
             itk.imwrite(itk_segmentation, segmentation_output_file)
 
             print(f"Segmentation output file: {segmentation_output_file}")
-
+        image_output_dir.mkdir(parents=True, exist_ok=True)
         for image_name, image in best_images.items():
             # print(f"Image name: {image_name}")
             # print(f"Image: {image}")

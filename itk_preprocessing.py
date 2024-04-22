@@ -376,7 +376,7 @@ def get_recentered_image_from_center_of_mass(
 
 
 def resample_image_to_reference(image: itk.Image, reference_image: itk.Image):
-    IMAGETYPE = itk.Image[itk.UC, 3]
+    IMAGETYPE = type(image)
 
     nearest_neighbor_interpolator = itk.NearestNeighborInterpolateImageFunction[
         IMAGETYPE, itk.D
