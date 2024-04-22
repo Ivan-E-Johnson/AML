@@ -169,15 +169,20 @@ class MaskMapper:
     # TODO Test to see if we can use the stacked images as the input to the model -- I will probably end up doing this
     # TODO Figure out where the "latent space" is and how to get it / visualize it
 
-    def __init__(self, mask_rate: float, number_of_patch_tensors: int):
+    def __init__(self, mask_rate: float, number_of_patch_tensors: int, test: bool= False):
         self.mask_rate = mask_rate
         self.index_order = [
             i for i in range(number_of_patch_tensors)
         ]  # [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-        self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
-            self.index_order, test_size=self.mask_rate
-        )
-
+        if test:
+            self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
+                self.index_order, test_size=self.mask_rate, random_state=42
+            )
+        else:
+            self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
+                self.index_order, test_size=self.mask_rate
+            )
+        print(self.index_order,self.orig_unmasked_indexes, self.orig_masked_indexes)
     def split_tensor_and_record_new_indexes(
         self, tensor: torch.Tensor, raw_positional_embeddings: torch.Tensor
     ):
@@ -224,3 +229,41 @@ class MaskMapper:
             reconstructed_image[:, orig_index, :] = normalized_x[:, new_index, :]
 
         return reconstructed_image
+
+import unittest
+
+class TestMaskMapper(unittest.TestCase):
+
+    def test_mapping(self):
+        # Example values
+        original_tensor = torch.tensor([
+            [[1, 2], [3, 4], [5, 6]],
+            [[7, 8], [9, 10], [11, 12]]
+        ])
+        positional_embeddings = torch.tensor([
+            [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
+            [[0.7, 0.8], [0.9, 1.0], [1.1, 1.2]]
+        ])
+        expected_reconstructed_image = torch.tensor([
+            [[1, 2], [3, 4], [5, 6]],
+            [[0.1, 0.2], [0.9, 1.0], [0.5, 0.6]]
+        ])
+
+        mask_mapper = MaskMapper(mask_rate=0.5, number_of_patch_tensors=3,test=True)
+
+        # Split tensor and record new indexes
+        unmasked_tensor, masked_tensor = mask_mapper.split_tensor_and_record_new_indexes(original_tensor,
+                                                                                         positional_embeddings)
+
+        # Check if the mappings are correct
+        for orig_index, new_index in mask_mapper.mask_index_mapping.items():
+            orig_patch = positional_embeddings[:, orig_index, :]
+            masked_patch = masked_tensor[:, new_index, :]
+            self.assertTrue(torch.all(masked_patch == orig_patch), f"Mismatch at masked index {new_index}")
+
+        for orig_index, new_index in mask_mapper.unmasked_index_mapping.items():
+            orig_patch = original_tensor[:, orig_index, :]
+            unmasked_patch = unmasked_tensor[:, new_index, :]
+            self.assertTrue(torch.all(unmasked_patch == orig_patch), f"Mismatch at unmasked index {new_index}")
+
+
