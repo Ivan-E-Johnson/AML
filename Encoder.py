@@ -25,6 +25,11 @@ from monai.transforms import (
     SaveImageD,
     LoadImageD,
 )
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
 
 
 def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
@@ -66,7 +71,7 @@ class LitAutoEncoder(pl.LightningModule):
 
         # base_data_path = Path(os.enviorn["DATA_PATH"])
         base_data_path = Path(
-            "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
+            os.getenv("DATA_PATH")
         )
         data_dicts = _create_image_dict(base_data_path, is_testing=True)
         train_image_paths, test_image_paths = train_test_split(
