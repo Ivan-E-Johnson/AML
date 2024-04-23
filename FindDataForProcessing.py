@@ -72,6 +72,8 @@ class SinglePatientWithSegmentation:
         self.segmentation_list = []
         self._split_segmentation()
         self._squash_segmentations_with_one_hot()
+        self.class_labels = ["BG", "PZ", "TZ", "AFMS", "Urethra"]
+        self.class_percentages = []
 
     def _squash_segmentations_with_one_hot(self):
         """
@@ -82,8 +84,12 @@ class SinglePatientWithSegmentation:
         # 0: background, 1: peripheral zone, 2: transition zone, 3: urethra , 4 AFMS
         # The original segmentation has a Z dimension that is 4 times the prostate volume
         squashed_seg_arr = np.zeros_like(itk.GetArrayFromImage(self.prostate_volume))
+
         for i in range(4):
             seg_array = itk.GetArrayFromImage(self.segmentation_list[i])
+            self.class_percentages.append(
+                np.sum(seg_array == 255) / np.prod(seg_array.shape)
+            )
             squashed_seg_arr += (i + 1) * seg_array / 255
         squashed_seg = itk.GetImageFromArray(squashed_seg_arr)
         squashed_seg.CopyInformation(self.prostate_volume)
@@ -97,6 +103,7 @@ class SinglePatientWithSegmentation:
         """
         desired_shape = self.prostate_volume.GetLargestPossibleRegion().GetSize()
         segmentation_array = itk.GetArrayFromImage(self.orig_segmentation_volume)
+
         for i in range(4):
             seg_array = segmentation_array[
                 i * desired_shape[2] : (i + 1) * desired_shape[2], :, :
@@ -112,6 +119,23 @@ class SinglePatientWithSegmentation:
         self.segmentation_volume = check_and_adjust_image_to_same_space(
             self.prostate_volume, self.segmentation_volume
         )
+
+    def get_segmentation_class_percentages(self):
+        """
+        Returns the class percentages
+        """
+        return {
+            self.class_labels[i]: self.class_percentages[i]
+            for i in range(len(self.class_labels))
+        }
+
+    def write_segmentation_class_percentages(self, output_path):
+        """
+        Writes the class percentages
+        """
+        with open(output_path, "w") as f:
+            for i in range(len(self.class_labels)):
+                f.write(f"{self.class_labels[i]}, {self.class_percentages[i]},\n")
 
     def get_prostate_volume(self):
         """
@@ -200,13 +224,23 @@ if __name__ == "__main__":
                 image_output_dir / f"{subject_dir.name}_segmentation.nii.gz"
             )
             if segmentation_output_file.exists():
-                segmentation_output_file.unlink()
-            segmentation_data = SinglePatientWithSegmentation(
-                prostate_volume=best_images["t2w"],
-                segmentation=dcm_file_list,
-            )
+                continue
+            try:
+                segmentation_data = SinglePatientWithSegmentation(
+                    prostate_volume=best_images["t2w"],
+                    segmentation=dcm_file_list,
+                )
 
-            segmentation_data.write_segmentation_volume(segmentation_output_file)
+                segmentation_data.write_segmentation_volume(segmentation_output_file)
+                segmentation_data.write_segmentation_class_percentages(
+                    image_output_dir
+                    / f"{subject_dir.name}_segmentation_class_percentages.csv"
+                )
+            except Exception as e:
+                print(f"Error processing {subject_dir.name}: {e}")
+                with open("errors.txt", "a") as f:
+                    f.write(f"Error processing {subject_dir.name}: {e}\n")
+                continue
 
             print(f"Segmentation output file: {segmentation_output_file}")
         image_output_dir.mkdir(parents=True, exist_ok=True)
@@ -214,4 +248,6 @@ if __name__ == "__main__":
             # print(f"Image name: {image_name}")
             # print(f"Image: {image}")
             output_file = image_output_dir / f"{subject_dir.name}_{image_name}.nii.gz"
+            if output_file.exists():
+                continue
             itk.imwrite(image, output_file)
