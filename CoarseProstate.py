@@ -581,12 +581,12 @@ def train_model(
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
     args.add_argument("--learning_rate", type=float, default=0.0008)
-    args.add_argument("--batch_size", type=int, default=5)
+    args.add_argument("--batch_size", type=int, default=10)
     args.add_argument("--dropout_prob", type=float, default=0.2)
     args.add_argument("--init_filters", type=int, default=8)
     args.add_argument("--blocks_down", type=tuple, default=(1, 2, 2, 4))
     args.add_argument("--blocks_up", type=tuple, default=(1, 1, 1))
-    args.add_argument("--epochs", type=int, default=1000)
+    args.add_argument("--epochs", type=int, default=100)
     args.add_argument(
         "--experiment_name", type=str, default="default_coarse_prostate_experiment"
     )
