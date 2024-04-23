@@ -7,6 +7,8 @@ import monai
 import numpy as np
 import pytorch_lightning
 import torch
+from skimage import measure
+
 from monai.config import print_config
 from monai.data import CacheDataset, list_data_collate
 from monai.data import DataLoader
@@ -33,6 +35,7 @@ from monai.transforms import (
 from monai.transforms import (
     LoadImaged,
     ToTensord,
+    ToTensor,
 )
 from monai.transforms import (
     RandGaussianNoiseD,
@@ -50,7 +53,7 @@ from support_functions import (
     ModalityStackTransformd,
     BestModelCheckpoint,
     LoadAndSplitLabelsToChannelsd,
-    convert_logits_to_one_hot,
+    convert_logits_to_one_hot, init_t2w_only_data_lists,
 )
 
 from pathlib import Path
@@ -64,7 +67,7 @@ load_dotenv()
 
 RUN_NAME = "CoarseProstate"
 
-
+# TODO REVERT BACK TO USING THE RAW DATA WITH BASIC NORMALIZATION
 def init_single_channel_raw_data():
     raw_dir = Path(os.getenv("RAW_WITH_SEGMENTATION_PATH"))
     subject_dirs = [
@@ -129,24 +132,25 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         # TODO Add the weights to the loss function and allow multichannel output
 
         self.dice_loss_function = DiceFocalLoss(
-            include_background=False,
             lambda_focal=0.5,
+            sigmoid=True,
+            smooth_nr=1e-5,
+            smooth_dr=1e-5,
         )
         self.tv_loss = TverskyLoss(
-            softmax=True,
-            alpha=0.3,
-            beta=0.7,
+            sigmoid=True,
+            alpha=0.5,
+            beta=0.5,
+            smooth_nr=1e-5,
+            smooth_dr=1e-5,
         )
         self.dice_metric = DiceMetric(
-            include_background=False,
             reduction="mean",
         )
         self.hausdorff_metric = HausdorffDistanceMetric(
-            include_background=False,
             reduction="mean",
         )
         self.surface_distance_metric = SurfaceDistanceMetric(
-            include_background=False,
             reduction="mean",
         )
 
@@ -155,12 +159,14 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         self.prepare_data()
         self.save_hyperparameters()
 
-        self.PostPred = Compose(
-            [
-                KeepLargestConnectedComponent(),
-                FillHoles(),
-            ]
-        )
+        # self.PostPred = Compose(
+        #     [
+        #         AsDiscrete(),
+        #         KeepLargestConnectedComponent(),
+        #         FillHoles(),
+        #         ToTensor(),
+        #     ]
+        # )
 
     def forward(self, x):
         """
@@ -180,7 +186,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         """
         # set up the correct data path
 
-        image_paths, mask_paths = init_single_channel_raw_data()
+        image_paths, mask_paths = init_t2w_only_data_lists()
         train_image_paths, test_image_paths, train_mask_paths, test_mask_paths = (
             train_test_split(image_paths, mask_paths, test_size=0.2)
         )
@@ -209,14 +215,14 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
                 EnsureChannelFirstD(
                     keys=["image", "label"], channel_dim="no_channel"
                 ),  # Add channel to image and mask so
-                Spacingd(
-                    keys=["image", "label"],
-                    pixdim=(0.5, 0.5, 3.0),
-                    mode=("bilinear", "nearest"),
-                ),
-                ResizeWithPadOrCropd(
-                    keys=["image", "label"], spatial_size=(384, 384, 24)
-                ),
+                # Spacingd(
+                #     keys=["image", "label"],
+                #     pixdim=(0.5, 0.5, 3.0),
+                #     mode=("bilinear", "nearest"),
+                # ),
+                # ResizeWithPadOrCropd(
+                #     keys=["image", "label"], spatial_size=(384, 384, 24)
+                # ),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=1),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=2),
@@ -239,14 +245,14 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
                 EnsureChannelFirstD(
                     keys=["image", "label"], channel_dim="no_channel"
                 ),  # Add channel to image and mask so
-                Spacingd(
-                    keys=["image", "label"],
-                    pixdim=(0.5, 0.5, 3.0),
-                    mode=("bilinear", "nearest"),
-                ),
-                ResizeWithPadOrCropd(
-                    keys=["image", "label"], spatial_size=(384, 364, 24)
-                ),
+                # Spacingd(
+                #     keys=["image", "label"],
+                #     pixdim=(0.5, 0.5, 3.0),
+                #     mode=("bilinear", "nearest"),
+                # ),
+                # ResizeWithPadOrCropd(
+                #     keys=["image", "label"], spatial_size=(384, 364, 24)
+                # ),
                 ToTensord(keys=["image", "label"]),
             ]
         )
@@ -297,6 +303,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
     def configure_optimizers(self):
         # Following the hyperparamters as described in https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9511435/
         # Initialize the optimizer with the initial learning rate
+        torch.set_grad_enabled(True)
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
         # Step decay scheduler
@@ -323,7 +330,8 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         torch.enable_grad()
         images, labels = batch["image"], batch["label"]
         outputs = self.forward(images)
-        outputs = self.PostPred(outputs)
+        # with torch.set_grad_enabled(True):
+        #     outputs = self.PostPred(outputs)
 
         if self.is_testing:
             print("Training Step")
@@ -334,6 +342,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         tv_loss = self.tv_loss(outputs, labels)
         # onehot_predictions = convert_logits_to_one_hot(outputs)
         # dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
+        outputs = torch.sigmoid(outputs)
         dice = self.dice_metric(y_pred=outputs, y=labels).mean()
         # Log metrics
         self.log(
@@ -370,7 +379,8 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         torch.no_grad()
         images, labels = batch["image"], batch["label"]
         outputs = self.forward(images)
-        outputs = self.PostPred(outputs)
+        # with torch.set_grad_enabled(True):
+        #     outputs = self.PostPred(outputs)
 
         if self.is_testing:
             print("Validation Step")
@@ -383,6 +393,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         # onehot_predictions = convert_logits_to_one_hot(outputs)
         # Calculate accuracy, precision, recall, and F1 score
 
+        outputs = torch.sigmoid(outputs)
         dice = self.dice_metric(y_pred=outputs, y=labels).mean()
         haussdorf = self.hausdorff_metric(y_pred=outputs, y=labels).mean()
         surface_distance = self.surface_distance_metric(y_pred=outputs, y=labels).mean()
@@ -528,6 +539,7 @@ def train_model(
     )
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "logs"
+    log_dir.mkdir(exist_ok=True, parents=True)
     tb_logger = pytorch_lightning.loggers.TensorBoardLogger(
         save_dir=log_dir.as_posix(), name=experiment_name
     )
@@ -538,6 +550,8 @@ def train_model(
         monitor="val_dice",
         mode="max",
         save_last=True,
+        save_top_k=5,
+        enable_version_counter=True,
         dirpath=log_dir.as_posix(),
         filename=checkpoint_fn,
     )
@@ -550,8 +564,10 @@ def train_model(
         enable_checkpointing=True,
         num_sanity_val_steps=1,
         log_every_n_steps=log_every_n_steps,
+        reload_dataloaders_every_n_epochs=100,
         callbacks=[
-            BestModelCheckpoint(),
+            BestModelCheckpoint(monitor="val_dice", mode="max", experiment_name=f"best_val_model_{experiment_name}"),
+            BestModelCheckpoint(monitor="haussdorf_distance", mode="min", experiment_name=f"best_haussdorf_model_{experiment_name}"),
             checkpoint_callback,
         ],  # Add the custom callback
     )
@@ -570,7 +586,7 @@ if __name__ == "__main__":
     args.add_argument("--init_filters", type=int, default=8)
     args.add_argument("--blocks_down", type=tuple, default=(1, 2, 2, 4))
     args.add_argument("--blocks_up", type=tuple, default=(1, 1, 1))
-    args.add_argument("--epochs", type=int, default=100)
+    args.add_argument("--epochs", type=int, default=1000)
     args.add_argument(
         "--experiment_name", type=str, default="default_coarse_prostate_experiment"
     )
