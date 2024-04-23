@@ -7,6 +7,7 @@ import monai
 import numpy as np
 import pytorch_lightning
 import torch
+import torchmetrics.clustering
 from skimage import measure
 
 from monai.config import print_config
@@ -16,7 +17,7 @@ from monai.losses import DiceCELoss, TverskyLoss, FocalLoss, DiceLoss, DiceFocal
 from monai.metrics import (
     DiceMetric,
     HausdorffDistanceMetric,
-    SurfaceDistanceMetric,
+
 )
 from monai.networks.layers import Norm
 from monai.networks.nets import UNet, SegResNet
@@ -137,23 +138,15 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             smooth_nr=1e-5,
             smooth_dr=1e-5,
         )
-        self.tv_loss = TverskyLoss(
-            sigmoid=True,
-            alpha=0.5,
-            beta=0.5,
-            smooth_nr=1e-5,
-            smooth_dr=1e-5,
-        )
         self.dice_metric = DiceMetric(
             reduction="mean",
         )
         self.hausdorff_metric = HausdorffDistanceMetric(
             reduction="mean",
         )
-        self.surface_distance_metric = SurfaceDistanceMetric(
-            reduction="mean",
-        )
+        # self.rand_score = torchmetrics.clustering.RandScore()
 
+        self.threshold_prob = 0.5 # Threshold for converting voxel_probability to binary
         self.best_val_dice = 0
         self.best_val_epoch = 0
         self.prepare_data()
@@ -339,10 +332,9 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             print(f"Labels.Shape = {labels.shape}")
             print(f"outputs shape {outputs.shape}")
         loss = self.dice_loss_function(outputs, labels)
-        tv_loss = self.tv_loss(outputs, labels)
         # onehot_predictions = convert_logits_to_one_hot(outputs)
         # dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
-        outputs = torch.sigmoid(outputs)
+        outputs = self.convert_logits_to_binary(outputs)
         dice = self.dice_metric(y_pred=outputs, y=labels).mean()
         # Log metrics
         self.log(
@@ -363,15 +355,15 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             sync_dist=self.multi_gpu,
             batch_size=self.batch_size,
         )
-        self.log(
-            "train_tv_loss",
-            tv_loss,
-            on_step=False,
-            on_epoch=True,
-            reduce_fx=torch.mean,
-            sync_dist=self.multi_gpu,
-            batch_size=self.batch_size,
-        )
+        # self.log(
+        #     "train_rand_score",
+        #     self.rand_score(preds=outputs, target=labels).mean(),
+        #     on_step=False,
+        #     on_epoch=True,
+        #     reduce_fx=torch.mean,
+        #     sync_dist=self.multi_gpu,
+        #     batch_size=self.batch_size,
+        # )
 
         return loss
 
@@ -389,20 +381,17 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             print(f"Shape after post_pred: {outputs.shape}")
 
         loss = self.dice_loss_function(outputs, labels)
-        tv_loss = self.tv_loss(outputs, labels)
-        # onehot_predictions = convert_logits_to_one_hot(outputs)
-        # Calculate accuracy, precision, recall, and F1 score
 
-        outputs = torch.sigmoid(outputs)
+        outputs = self.convert_logits_to_binary(outputs)
         dice = self.dice_metric(y_pred=outputs, y=labels).mean()
         haussdorf = self.hausdorff_metric(y_pred=outputs, y=labels).mean()
-        surface_distance = self.surface_distance_metric(y_pred=outputs, y=labels).mean()
+        # rand_score = self.rand_score(preds=outputs, target=labels).mean()
 
         if self.is_testing:
             print(f"Predictions shape: {outputs.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
-            print(f"Surface Distance: {surface_distance}")
+            print(f"Rand Score: {rand_score}")
 
         self.log(
             name="haussdorf_distance",
@@ -412,22 +401,15 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             batch_size=self.batch_size,
             sync_dist=self.multi_gpu,
         )
-        self.log(
-            name="tv_loss",
-            value=tv_loss,
-            on_step=False,
-            on_epoch=True,
-            batch_size=self.batch_size,
-            sync_dist=self.multi_gpu,
-        )
-        self.log(
-            name="surface_distance",
-            value=surface_distance,
-            on_step=False,
-            on_epoch=True,
-            batch_size=self.batch_size,
-            sync_dist=self.multi_gpu,
-        )
+
+        # self.log(
+        #     name="rand_score",
+        #     value=rand_score,
+        #     on_step=False,
+        #     on_epoch=True,
+        #     batch_size=self.batch_size,
+        #     sync_dist=self.multi_gpu,
+        # )
         # Log metrics
         self.log(
             "val_dice",
@@ -448,6 +430,10 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         torch.enable_grad()
         return loss
 
+    def convert_logits_to_binary(self, logits):
+        probs = torch.sigmoid(logits)
+        return probs > self.threshold_prob
+
     def on_validation_epoch_end(self):
         torch.no_grad()
         # Get the first batch of the validation data
@@ -465,7 +451,9 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
 
         # Run the inference
         outputs = self.forward(images)
-        outputs = convert_logits_to_one_hot(outputs)
+        probs = torch.sigmoid(outputs) # Convert to probabilities
+
+        outputs = probs > self.threshold_prob
 
         print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
         print(f"Output shape: {outputs.shape}")
@@ -483,6 +471,14 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         monai.visualize.plot_2d_or_3d_image(
             data=outputs,
             tag=f"Predictions",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=probs,
+            tag=f"Probabilities",
             step=self.current_epoch,
             writer=self.logger.experiment,
             max_channels=self.number_of_classes,
