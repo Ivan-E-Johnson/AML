@@ -182,7 +182,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         """
         # set up the correct data path
 
-        image_paths, mask_paths = init_t2w_only_data_lists()
+        image_paths, mask_paths = init_single_channel_raw_data()
         train_image_paths, test_image_paths, train_mask_paths, test_mask_paths = (
             train_test_split(image_paths, mask_paths, test_size=0.2)
         )
