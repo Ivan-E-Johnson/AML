@@ -487,7 +487,6 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             max_channels=self.number_of_classes,
             frame_dim=-1,
         )
-
         torch.enable_grad()
 
 

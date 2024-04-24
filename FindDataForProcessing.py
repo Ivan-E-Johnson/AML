@@ -1,3 +1,4 @@
+import shutil
 import tempfile
 
 
@@ -70,8 +71,6 @@ class SinglePatientWithSegmentation:
         self.orig_segmentation_volume = itk_read_from_dicomfn_list(
             self.segmentation_dcm
         )
-        self.class_labels = ["BG", "PZ", "TZ", "AFMS", "Urethra"]
-        self.class_percentages = list()
         self.segmentation_list = []
         self._split_segmentation()
         self._squash_segmentations_with_one_hot()
@@ -88,14 +87,6 @@ class SinglePatientWithSegmentation:
 
         for i in range(4):
             seg_array = itk.GetArrayFromImage(self.segmentation_list[i])
-            try:
-                self.class_percentages.append(
-                    np.sum(seg_array == 255) / np.prod(seg_array.shape)
-                )
-            except Exception as e:
-                print(e)
-                print(f"Error calculating class percentages for class {i}")
-
             squashed_seg_arr += (i + 1) * seg_array / 255
         squashed_seg = itk.GetImageFromArray(squashed_seg_arr)
         squashed_seg.CopyInformation(self.prostate_volume)
@@ -135,23 +126,6 @@ class SinglePatientWithSegmentation:
             self.prostate_volume, self.segmentation_volume
         )
 
-    def get_segmentation_class_percentages(self):
-        """
-        Returns the class percentages
-        """
-        return {
-            self.class_labels[i]: self.class_percentages[i]
-            for i in range(len(self.class_labels))
-        }
-
-    def write_segmentation_class_percentages(self, output_path):
-        """
-        Writes the class percentages
-        """
-        with open(output_path, "w") as f:
-            for i in range(len(self.class_labels)):
-                f.write(f"{self.class_labels[i]}, {self.class_percentages[i]},\n")
-
     def get_prostate_volume(self):
         """
         Returns the prostate volume.
@@ -187,33 +161,10 @@ class SinglePatientWithSegmentation:
         itk.imwrite(self.segmentation_volume, output_path.as_posix())
 
 
-def read_and_report_all_segmentation_data(base_path):
-    """
-    Reads and reports all segmentation data in the specified base path.
-
-    Parameters
-    ----------
-        base_path : Path
-            a Path object that represents the base path where the segmentation data is stored
-    """
-    segmentation_dirs = [
-        x for x in base_path.iterdir() if x.is_dir() and "ProstateX" in x.name
-    ]
-    df = pd.DataFrame()
-    for segmentation_dir in segmentation_dirs:
-        csv_file = (
-            segmentation_dir / f"{subject_dir.name}_segmentation_class_percentages.csv"
-        )
-
-        if not csv_file.exists():
-            continue
-        row_df = pd.read_csv(csv_file)
-        row_df["subject"] = segmentation_dir.name
-        if df.empty:
-            df = row_df
-        else:
-            df = pd.concat([df, row_df])
-    return df
+def check_study_complete(study_dir: Path, is_mask: bool):
+    num_files = list(study_dir.rglob("*.nii.gz"))
+    expected_num_files = 5 if is_mask else 4
+    return len(num_files) == expected_num_files
 
 
 if __name__ == "__main__":
@@ -245,8 +196,8 @@ if __name__ == "__main__":
 
     for subject_dir in subject_dirs:
         has_corresponding_segmentation = subject_dir.name in segmentation_names
-        # Check if the segmentation data exists
-
+        if check_study_complete(subject_dir, has_corresponding_segmentation):
+            continue
         try:
             volume_mapping = ProstatIDDicomStudyToVolumesMapping(subject_dir)
         except Exception as e:
@@ -257,6 +208,7 @@ if __name__ == "__main__":
         )
         image_output_dir = default_output_dir / subject_dir.name
         if has_corresponding_segmentation:
+
             segmentation_dicom_dir = prostatX_segmentation_data / subject_dir.name
             image_output_dir = with_segmentation_output_dir / subject_dir.name
             image_output_dir.mkdir(parents=True, exist_ok=True)
@@ -266,20 +218,16 @@ if __name__ == "__main__":
                 image_output_dir / f"{subject_dir.name}_segmentation.nii.gz"
             )
             if segmentation_output_file.exists():
-                continue
+                segmentation_output_file.unlink()
             try:
                 segmentation_data = SinglePatientWithSegmentation(
                     prostate_volume=best_images["t2w"],
                     segmentation=dcm_file_list,
                 )
-
                 segmentation_data.write_segmentation_volume(segmentation_output_file)
-                segmentation_data.write_segmentation_class_percentages(
-                    image_output_dir
-                    / f"{subject_dir.name}_segmentation_class_percentages.csv"
-                )
             except Exception as e:
                 print(f"Error processing {subject_dir.name}: {e}")
+                shutil.rmtree(image_output_dir)
                 with open("errors.txt", "a") as f:
                     f.write(f"Error processing {subject_dir.name}: {e}\n")
                 continue

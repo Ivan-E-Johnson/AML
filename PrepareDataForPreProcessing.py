@@ -12,9 +12,9 @@ from itk_preprocessing import (
 
 class SingleStudyStackedDataBase:
     x_y_size = 320  # Index
-    z_size = 64  # Index
+    z_size = 32  # Index
     x_y_fov = 160  # mm
-    z_fov = 160  # mm
+    z_fov = 96  # mm
     IMAGE_PIXEL_TYPE = itk.F
     MASK_PIXEL_TYPE = itk.UC
     IMAGE_TYPE = itk.Image[IMAGE_PIXEL_TYPE, 3]
@@ -28,6 +28,7 @@ class SingleStudyStackedDataBase:
         self.blow = study_path / f"{study_path.name}_b0low.nii.gz"
         self.tracew = study_path / f"{study_path.name}_tracew.nii.gz"
 
+    def load_images(self):
         self.t2w = itk.imread(self.t2w_path.as_posix())
         self.adc = itk.imread(self.adc_path.as_posix())
         self.blow = itk.imread(self.blow.as_posix())
@@ -53,9 +54,22 @@ class SingleStudyStackedDataBase:
         return resampled_t2w, resampled_adc, resampled_blow, resampled_tracew
 
     def resample_coresponding_label(self, label: itk.Image[itk.UC, 3]):
-        return self._resample_images_for_training(label)
+        orig_values, orig_counts = np.unique(
+            itk.GetArrayFromImage(label), return_counts=True
+        )
+        resampled_label = self._resample_images_for_training(label, is_mask=True)
+        resampled_values, resampled_counts = np.unique(
+            itk.GetArrayFromImage(resampled_label), return_counts=True
+        )
+        print(f"Original Values: {orig_values}, Original Counts: {orig_counts}")
+        print(
+            f"Resampled Values: {resampled_values}, Resampled Counts: {resampled_counts}"
+        )
+        return resampled_label
 
-    def _resample_images_for_training(self, image_to_resample: itk.Image[itk.F, 3]):
+    def _resample_images_for_training(
+        self, image_to_resample: itk.Image[itk.F, 3], is_mask=False
+    ):
 
         # Get the center of mass of the mask
         center_of_mass = find_center_of_gravity_in_index_space(self.t2w)
@@ -88,9 +102,11 @@ class SingleStudyStackedDataBase:
         )
         # Get the new spacing for the recentered image
 
-        linear_interpolator = itk.LinearInterpolateImageFunction[
-            self.IMAGE_TYPE, itk.D
-        ].New()
+        interpolator = itk.LinearInterpolateImageFunction[self.IMAGE_TYPE, itk.D].New()
+        if is_mask:
+            interpolator = itk.NearestNeighborInterpolateImageFunction[
+                self.IMAGE_TYPE, itk.D
+            ].New()
         identity_transform = itk.IdentityTransform[itk.D, 3].New()
         # Initialize the ResampleImageFilter
         itk_t2w_resampler = itk.ResampleImageFilter[
@@ -101,7 +117,7 @@ class SingleStudyStackedDataBase:
         itk_t2w_resampler.SetTransform(identity_transform)
         itk_t2w_resampler.UseReferenceImageOn()
         itk_t2w_resampler.UpdateLargestPossibleRegion()
-        itk_t2w_resampler.SetInterpolator(linear_interpolator)
+        itk_t2w_resampler.SetInterpolator(interpolator)
         itk_t2w_resampler.Update()
         resampled_image = itk_t2w_resampler.GetOutput()
         return resampled_image
@@ -184,17 +200,33 @@ class SingleStudyStackedDataBase:
         rescaled_tracew = self._convert_images_to_zscore_images(resampled_tracew)
         return rescaled_t2w, rescaled_adc, rescaled_blow, rescaled_tracew
 
-    def create_stacked_image(self):
-        pp_t2w, pp_adc, _, pp_tracew = self.pre_process_images_for_training()
-        ImageToVectorImageFilterType = itk.ComposeImageFilter[
-            self.IMAGE_TYPE, self.VECTOR_IMAGE_TYPE
-        ].New()
-        ImageToVectorImageFilterType.SetInput1(pp_t2w)
-        ImageToVectorImageFilterType.SetInput2(pp_adc)
-        # ImageToVectorImageFilterType.SetInput3(pp_blow)
-        ImageToVectorImageFilterType.SetInput3(pp_tracew)
-        ImageToVectorImageFilterType.Update()
-        return ImageToVectorImageFilterType.GetOutput()
+    # def create_stacked_image(self):
+    #     pp_t2w, pp_adc, _, pp_tracew = self.pre_process_images_for_training()
+    #     ImageToVectorImageFilterType = itk.ComposeImageFilter[
+    #         self.IMAGE_TYPE, self.VECTOR_IMAGE_TYPE
+    #     ].New()
+    #     ImageToVectorImageFilterType.SetInput1(pp_t2w)
+    #     ImageToVectorImageFilterType.SetInput2(pp_adc)
+    #     # ImageToVectorImageFilterType.SetInput3(pp_blow)
+    #     ImageToVectorImageFilterType.SetInput3(pp_tracew)
+    #     ImageToVectorImageFilterType.Update()
+    #     return ImageToVectorImageFilterType.GetOutput()
+    #
+
+
+# def find_label_stats(label: itk.Image[itk.UC, 3]):
+#     unique, counts = np.unique(itk.GetArrayFromImage(label), return_counts=True)
+#     total_pixels = np.prod(label.GetLargestPossibleRegion().GetSize())
+#     class_labels = ["BG", "PZ", "TZ", "AFMS", "Urethra"]
+#     for i, (label, count) in enumerate(zip(unique, counts)):
+#         label_dict = {
+#             "Label": class_labels[i],
+#             "Count": count,
+#             "Percentage": count / total_pixels,
+#         }
+#         print(label_dict)
+#
+#
 
 
 def preprocess_images(
@@ -218,6 +250,11 @@ def preprocess_images(
             subject_output_dir.mkdir(parents=True, exist_ok=True)
 
             study = SingleStudyStackedDataBase(dir)
+            try:
+                study.load_images()
+            except:
+                print(f"Study {dir.name} failed to load images")
+                continue
             pp_t2w, pp_adc, pp_blow, pp_tracew = study.pre_process_images_for_training()
             itk.imwrite(pp_t2w, subject_output_dir / f"{dir.name}_pp_t2w.nii.gz")
             itk.imwrite(pp_adc, subject_output_dir / f"{dir.name}_pp_adc.nii.gz")
@@ -228,22 +265,35 @@ def preprocess_images(
                 segmentation_path = dir / f"{dir.name}_segmentation.nii.gz"
                 segmentation = itk.imread(segmentation_path.as_posix())
                 pp_segmentation = study.resample_coresponding_label(segmentation)
-                itk.imwrite(
-                    pp_segmentation,
-                    subject_output_dir / f"{dir.name}_pp_segmentation.nii.gz",
-                )
 
-            stacked_image = study.create_stacked_image()
-            itk.imwrite(
-                stacked_image, subject_output_dir / f"{dir.name}_stacked_image.nii.gz"
-            )
+                pp_seg_output_dir: Path = (
+                    subject_output_dir / f"{dir.name}_pp_segmentation.nii.gz"
+                )
+                if pp_seg_output_dir.exists():
+                    pp_seg_output_dir.unlink()
+                itk.imwrite(pp_segmentation, pp_seg_output_dir)
+
+            # stacked_image = study.create_stacked_image()
+            # itk.imwrite(
+            #     stacked_image, subject_output_dir / f"{dir.name}_stacked_image.nii.gz"
+            # )
 
 
 if __name__ == "__main__":
-    base_data_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/RAW"
+    with_out_seg_data_path = Path(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW"
     )
-    output_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed"
+    with_out_seg_output_path = Path(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
     )
-    preprocess_images(base_data_path, output_path, has_segmentation=False)
+    preprocess_images(
+        with_out_seg_data_path, with_out_seg_output_path, has_segmentation=False
+    )
+    # with_seg_data_path = Path(
+    #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/RAW"
+    # )
+    # with_seg_output_path = Path(
+    #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed"
+    # )
+    #
+    # preprocess_images(with_seg_data_path, with_seg_output_path, has_segmentation=True)
