@@ -17,7 +17,6 @@ from monai.losses import DiceCELoss, TverskyLoss, FocalLoss, DiceLoss, DiceFocal
 from monai.metrics import (
     DiceMetric,
     HausdorffDistanceMetric,
-
 )
 from monai.networks.layers import Norm
 from monai.networks.nets import UNet, SegResNet
@@ -54,7 +53,8 @@ from support_functions import (
     ModalityStackTransformd,
     BestModelCheckpoint,
     LoadAndSplitLabelsToChannelsd,
-    convert_logits_to_one_hot, init_t2w_only_data_lists,
+    convert_logits_to_one_hot,
+    init_t2w_only_data_lists,
 )
 
 from pathlib import Path
@@ -67,6 +67,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 RUN_NAME = "CoarseProstate"
+
 
 # TODO REVERT BACK TO USING THE RAW DATA WITH BASIC NORMALIZATION
 def init_single_channel_raw_data():
@@ -146,7 +147,9 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         )
         # self.rand_score = torchmetrics.clustering.RandScore()
 
-        self.threshold_prob = 0.5 # Threshold for converting voxel_probability to binary
+        self.threshold_prob = (
+            0.5  # Threshold for converting voxel_probability to binary
+        )
         self.best_val_dice = 0
         self.best_val_epoch = 0
         self.prepare_data()
@@ -391,7 +394,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             print(f"Predictions shape: {outputs.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
-            print(f"Rand Score: {rand_score}")
+            # print(f"Rand Score: {rand_score}")
 
         self.log(
             name="haussdorf_distance",
@@ -451,7 +454,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
 
         # Run the inference
         outputs = self.forward(images)
-        probs = torch.sigmoid(outputs) # Convert to probabilities
+        probs = torch.sigmoid(outputs)  # Convert to probabilities
 
         outputs = probs > self.threshold_prob
 
@@ -562,8 +565,16 @@ def train_model(
         log_every_n_steps=log_every_n_steps,
         reload_dataloaders_every_n_epochs=100,
         callbacks=[
-            BestModelCheckpoint(monitor="val_dice", mode="max", experiment_name=f"best_val_model_{experiment_name}"),
-            BestModelCheckpoint(monitor="haussdorf_distance", mode="min", experiment_name=f"best_haussdorf_model_{experiment_name}"),
+            BestModelCheckpoint(
+                monitor="val_dice",
+                mode="max",
+                experiment_name=f"best_val_model_{experiment_name}",
+            ),
+            BestModelCheckpoint(
+                monitor="haussdorf_distance",
+                mode="min",
+                experiment_name=f"best_haussdorf_model_{experiment_name}",
+            ),
             checkpoint_callback,
         ],  # Add the custom callback
     )

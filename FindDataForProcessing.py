@@ -1,9 +1,10 @@
 import tempfile
 
-import botimageai
+
 from pathlib import Path
 import itk
 import numpy as np
+import pandas as pd
 import pydicom
 import dicom2nifti
 
@@ -69,11 +70,11 @@ class SinglePatientWithSegmentation:
         self.orig_segmentation_volume = itk_read_from_dicomfn_list(
             self.segmentation_dcm
         )
+        self.class_labels = ["BG", "PZ", "TZ", "AFMS", "Urethra"]
+        self.class_percentages = list()
         self.segmentation_list = []
         self._split_segmentation()
         self._squash_segmentations_with_one_hot()
-        self.class_labels = ["BG", "PZ", "TZ", "AFMS", "Urethra"]
-        self.class_percentages = []
 
     def _squash_segmentations_with_one_hot(self):
         """
@@ -87,9 +88,14 @@ class SinglePatientWithSegmentation:
 
         for i in range(4):
             seg_array = itk.GetArrayFromImage(self.segmentation_list[i])
-            self.class_percentages.append(
-                np.sum(seg_array == 255) / np.prod(seg_array.shape)
-            )
+            try:
+                self.class_percentages.append(
+                    np.sum(seg_array == 255) / np.prod(seg_array.shape)
+                )
+            except Exception as e:
+                print(e)
+                print(f"Error calculating class percentages for class {i}")
+
             squashed_seg_arr += (i + 1) * seg_array / 255
         squashed_seg = itk.GetImageFromArray(squashed_seg_arr)
         squashed_seg.CopyInformation(self.prostate_volume)
@@ -102,6 +108,15 @@ class SinglePatientWithSegmentation:
 
         """
         desired_shape = self.prostate_volume.GetLargestPossibleRegion().GetSize()
+        test_shape = self.orig_segmentation_volume.GetLargestPossibleRegion().GetSize()
+        if desired_shape[2] * 4 != test_shape[2]:
+            raise ValueError(
+                f"Segmentation Z dimension ({test_shape[2]}) is not 4 times the prostate volume Z dimension ({desired_shape[2]})"
+            )
+        if desired_shape[0] != test_shape[0] or desired_shape[1] != test_shape[1]:
+            desired_shape[0] = test_shape[0]
+            desired_shape[1] = test_shape[1]
+
         segmentation_array = itk.GetArrayFromImage(self.orig_segmentation_volume)
 
         for i in range(4):
@@ -172,6 +187,35 @@ class SinglePatientWithSegmentation:
         itk.imwrite(self.segmentation_volume, output_path.as_posix())
 
 
+def read_and_report_all_segmentation_data(base_path):
+    """
+    Reads and reports all segmentation data in the specified base path.
+
+    Parameters
+    ----------
+        base_path : Path
+            a Path object that represents the base path where the segmentation data is stored
+    """
+    segmentation_dirs = [
+        x for x in base_path.iterdir() if x.is_dir() and "ProstateX" in x.name
+    ]
+    df = pd.DataFrame()
+    for segmentation_dir in segmentation_dirs:
+        csv_file = (
+            segmentation_dir / f"{subject_dir.name}_segmentation_class_percentages.csv"
+        )
+
+        if not csv_file.exists():
+            continue
+        row_df = pd.read_csv(csv_file)
+        row_df["subject"] = segmentation_dir.name
+        if df.empty:
+            df = row_df
+        else:
+            df = pd.concat([df, row_df])
+    return df
+
+
 if __name__ == "__main__":
     prostatX_data = Path(
         "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/ProstateX/ProstateX_DICOM/manifest-A3Y4AE4o5818678569166032044/PROSTATEx"
@@ -212,8 +256,6 @@ if __name__ == "__main__":
             volume_mapping.get_best_inputs_images()
         )
         image_output_dir = default_output_dir / subject_dir.name
-        if not has_corresponding_segmentation:
-            continue
         if has_corresponding_segmentation:
             segmentation_dicom_dir = prostatX_segmentation_data / subject_dir.name
             image_output_dir = with_segmentation_output_dir / subject_dir.name
