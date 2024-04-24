@@ -80,8 +80,8 @@ def init_single_channel_raw_data():
     image_paths = []
     mask_paths = []
     for subject_dir in subject_dirs:
-        mask_paths.append(subject_dir / f"{subject_dir.name}_Segmentation.nii.gz")
-        image_paths.append(subject_dir / f"{subject_dir.name}_T2w.nii.gz")
+        mask_paths.append(subject_dir / f"{subject_dir.name}_segmentation.nii.gz")
+        image_paths.append(subject_dir / f"{subject_dir.name}_t2w.nii.gz")
         assert mask_paths[-1].exists(), f"Mask path {mask_paths[-1]} does not exist"
         assert image_paths[-1].exists(), f"Image path {image_paths[-1]} does not exist"
     return image_paths, mask_paths
@@ -210,15 +210,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
                 LoadImaged(keys=["image", "label"]),
                 EnsureChannelFirstD(
                     keys=["image", "label"], channel_dim="no_channel"
-                ),  # Add channel to image and mask so
-                # Spacingd(
-                #     keys=["image", "label"],
-                #     pixdim=(0.5, 0.5, 3.0),
-                #     mode=("bilinear", "nearest"),
-                # ),
-                # ResizeWithPadOrCropd(
-                #     keys=["image", "label"], spatial_size=(384, 384, 24)
-                # ),
+                ),  # Add channel to image and mask
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=1),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=2),
@@ -241,14 +233,6 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
                 EnsureChannelFirstD(
                     keys=["image", "label"], channel_dim="no_channel"
                 ),  # Add channel to image and mask so
-                # Spacingd(
-                #     keys=["image", "label"],
-                #     pixdim=(0.5, 0.5, 3.0),
-                #     mode=("bilinear", "nearest"),
-                # ),
-                # ResizeWithPadOrCropd(
-                #     keys=["image", "label"], spatial_size=(384, 364, 24)
-                # ),
                 ToTensord(keys=["image", "label"]),
             ]
         )
@@ -282,6 +266,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             shuffle=True,
             num_workers=12,
             collate_fn=list_data_collate,
+            persistent_workers=True,
         )
         return train_loader
 
@@ -293,7 +278,12 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         DataLoader: The validation data loader.
         """
 
-        val_loader = DataLoader(self.val_ds, batch_size=self.batch_size, num_workers=8)
+        val_loader = DataLoader(
+            self.val_ds,
+            batch_size=self.batch_size,
+            num_workers=8,
+            persistent_workers=True,
+        )
         return val_loader
 
     def configure_optimizers(self):
@@ -502,7 +492,7 @@ def train_model(
 ):
     os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    accelerator = os.environ.get("ACCELERATOR", "gpu")
+    accelerator = os.environ.get("ACCELERATOR", "cpu")
     gpu_id = os.environ.get("GPU_ID", 0)
     using_multi_gpu = False
     devices: list[int] | str
