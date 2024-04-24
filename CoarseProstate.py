@@ -71,7 +71,7 @@ RUN_NAME = "CoarseProstate"
 
 # TODO REVERT BACK TO USING THE RAW DATA WITH BASIC NORMALIZATION
 def init_single_channel_raw_data():
-    raw_dir = Path(os.getenv("RAW_WITH_SEGMENTATION_PATH"))
+    raw_dir = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
     subject_dirs = [
         subject_dir
         for subject_dir in raw_dir.iterdir()
@@ -80,8 +80,8 @@ def init_single_channel_raw_data():
     image_paths = []
     mask_paths = []
     for subject_dir in subject_dirs:
-        mask_paths.append(subject_dir / f"{subject_dir.name}_segmentation.nii.gz")
-        image_paths.append(subject_dir / f"{subject_dir.name}_t2w.nii.gz")
+        mask_paths.append(subject_dir / f"{subject_dir.name}_pp_segmentation.nii.gz")
+        image_paths.append(subject_dir / f"{subject_dir.name}_pp_t2w.nii.gz")
         assert mask_paths[-1].exists(), f"Mask path {mask_paths[-1]} does not exist"
         assert image_paths[-1].exists(), f"Image path {image_paths[-1]} does not exist"
     return image_paths, mask_paths
@@ -448,10 +448,10 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
 
         outputs = probs > self.threshold_prob
 
-        print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
-        print(f"Output shape: {outputs.shape}")
-        print(f"Labels shape: {labels.shape}")
-        print(f"Images shape: {images.shape}")
+        #print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
+        #print(f"Output shape: {outputs.shape}")
+        #print(f"Labels shape: {labels.shape}")
+        #print(f"Images shape: {images.shape}")
 
         monai.visualize.plot_2d_or_3d_image(
             data=labels,
