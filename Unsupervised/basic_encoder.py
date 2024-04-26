@@ -122,9 +122,7 @@ train_transforms = Compose(
 
 
 if __name__ == "__main__":
-    base_data_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
-    )
+    base_data_path = Path("/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed")
     print(f"Base data path: {base_data_path}")
     data_dicts = _create_image_dict(base_data_path, is_testing=True)
     train_image_paths, test_image_paths = train_test_split(data_dicts, test_size=0.2)

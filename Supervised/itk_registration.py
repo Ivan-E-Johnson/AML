@@ -31,9 +31,7 @@ def normalize_image(image):
 
 
 def find_renamed_images(sorted_prostate_path: Path, bi_prostatex_path: Path):
-    desired_output_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/bi_prostatex"
-    )
+    desired_output_path = Path("/bi_prostatex")
     subject_names = [
         x.name for x in sorted_prostate_path.iterdir() if "ProstateX" in x.name
     ]
@@ -212,9 +210,7 @@ if __name__ == "__main__":
     # base_data_path = Path(
     #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/SortedProstateData"
     # )
-    sorted_prostate_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/SortedProstateData"
-    )
+    sorted_prostate_path = Path("/SortedProstateData")
     # base_secondary_output_path = Path(
     #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/SecondaryData"
     # )

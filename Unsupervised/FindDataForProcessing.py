@@ -1,25 +1,17 @@
 import shutil
-import tempfile
-
 
 from pathlib import Path
 import itk
 import numpy as np
-import pandas as pd
-import pydicom
-import dicom2nifti
 
 from botimageai.dicom_processing.process_one_dicom_study_to_volumes_mapping import (
     ProstatIDDicomStudyToVolumesMapping,
 )
-from dcm_classifier.dicom_volume import DicomSingleVolumeInfoBase
 from dcm_classifier.utility_functions import itk_read_from_dicomfn_list
 
-from data_connector import (
-    check_images_in_same_space,
+from Supervised.data_connector import (
     check_and_adjust_image_to_same_space,
 )
-from itk_preprocessing import resample_image_to_reference
 
 
 class SinglePatientWithSegmentation:
@@ -171,15 +163,9 @@ if __name__ == "__main__":
     prostatX_data = Path(
         "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/ProstateX/ProstateX_DICOM/manifest-A3Y4AE4o5818678569166032044/PROSTATEx"
     )
-    prostatX_segmentation_data = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/Segmentations/PROSTATEx"
-    )
-    default_output_dir = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW"
-    )
-    with_segmentation_output_dir = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/RAW"
-    )
+    prostatX_segmentation_data = Path("/Segmentations/PROSTATEx")
+    default_output_dir = Path("/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW")
+    with_segmentation_output_dir = Path("/ALL_PROSTATEx/WITH_SEGMENTATION/RAW")
     default_output_dir.mkdir(parents=True, exist_ok=True)
     with_segmentation_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -228,7 +214,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Error processing {subject_dir.name}: {e}")
                 shutil.rmtree(image_output_dir)
-                with open("errors.txt", "a") as f:
+                with open("../errors.txt", "a") as f:
                     f.write(f"Error processing {subject_dir.name}: {e}\n")
                 continue
 

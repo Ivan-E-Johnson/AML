@@ -3,7 +3,7 @@ import itk
 import numpy as np
 from tqdm import tqdm
 
-from itk_preprocessing import (
+from Supervised.itk_preprocessing import (
     find_center_of_gravity_in_index_space,
     calculate_new_origin_from_center_of_mass,
     create_blank_image,
@@ -280,12 +280,8 @@ def preprocess_images(
 
 
 if __name__ == "__main__":
-    with_out_seg_data_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW"
-    )
-    with_out_seg_output_path = Path(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed"
-    )
+    with_out_seg_data_path = Path("/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW")
+    with_out_seg_output_path = Path("/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed")
     preprocess_images(
         with_out_seg_data_path, with_out_seg_output_path, has_segmentation=False
     )
