@@ -448,10 +448,10 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
 
         outputs = probs > self.threshold_prob
 
-        #print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
-        #print(f"Output shape: {outputs.shape}")
-        #print(f"Labels shape: {labels.shape}")
-        #print(f"Images shape: {images.shape}")
+        # print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
+        # print(f"Output shape: {outputs.shape}")
+        # print(f"Labels shape: {labels.shape}")
+        # print(f"Images shape: {images.shape}")
 
         monai.visualize.plot_2d_or_3d_image(
             data=labels,
