@@ -43,6 +43,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         save_attn: bool = False,
         mask_rate: float = 0.75,
         test: bool = False,
+        training_unsupervised: bool = False,
         number_of_patch_tensors: int = 3,
     ) -> None:
 
@@ -51,6 +52,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         self.unmasked_dict = (
             {}
         )  # Dict of index of patches to mask and the unmasked patches
+        self.training_unsupervised = training_unsupervised
         if not test:
             super().__init__(
                 in_channels,
@@ -91,10 +93,13 @@ class MAEViTAutoEnc(ViTAutoEnc):
         raw_patched_image_with_embeddings = self.patch_embedding(x)
         raw_positional_embeddings = self.patch_embedding.position_embeddings
         masked_patches = raw_positional_embeddings.repeat(batch_size, 1, 1)
-        unmasked_tensor, masked_patches = self.split_tensor_and_record_new_indexes(
-            raw_patched_image_with_embeddings, masked_patches
-        )
+        if self.training_unsupervised:
 
+            unmasked_tensor, masked_patches = self.split_tensor_and_record_new_indexes(
+                raw_patched_image_with_embeddings, masked_patches
+            )
+        else:
+            unmasked_tensor = raw_patched_image_with_embeddings
         # Masked patches
 
         hidden_states_out = []
@@ -111,11 +116,14 @@ class MAEViTAutoEnc(ViTAutoEnc):
         x = torch.reshape(
             concated_masked, [concated_masked.shape[0], concated_masked.shape[1], *d]
         )
-
-        x = self.conv3d_transpose(x)
-        x = self.conv3d_transpose_1(x)
+        #decoder
+        x = self.decoder(x)
         return x, hidden_states_out
 
+    def decoder(self, x):
+        x = self.conv3d_transpose(x)
+        x = self.conv3d_transpose_1(x)
+        return x
     def split_tensor_and_record_new_indexes(
         self, tensor: torch.Tensor, raw_positional_embeddings: torch.Tensor
     ):
