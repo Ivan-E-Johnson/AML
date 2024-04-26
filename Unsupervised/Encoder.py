@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 
@@ -24,9 +25,20 @@ from monai.transforms import (
     CopyItemsd,
     SaveImageD,
     LoadImageD,
+    RandFlipd,
+    RandRotated,
+    RandGaussianNoiseD,
+    RandHistogramShiftD,
 )
 from dotenv import load_dotenv
 import os
+
+import os
+from pathlib import Path
+import torch
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 load_dotenv()
 
@@ -42,37 +54,56 @@ def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
 
 
 class LitAutoEncoder(pl.LightningModule):
-    def __init__(self, img_size, patch_size, in_channels, lr=1e-4):
+    def __init__(
+        self,
+        img_size,
+        patch_size,
+        in_channels,
+        hidden_size,
+        mlp_dim,
+        proj_type,
+        num_layers,
+        decov_chns,
+        num_heads,
+        testing,
+        lr=1e-4,
+    ):
         super().__init__()
-        # self.model = ViTAutoEnc(
-        #     in_channels=in_channels,
-        #     img_size=img_size,
-        #     patch_size=patch_size,
-        #     pos_embed="conv",
-        #     hidden_size=768,
-        #     mlp_dim=3072,
-        # )
+        self.testing = testing
+        self.batch_size = 4
+        self.number_workers = 4
+        self.cache_rate = 0.8
+        self.hidden_size = hidden_size
+        self.mlp_dim = mlp_dim
+        self.proj_type = proj_type
+        self.in_channels = in_channels
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_layers = num_layers
+        self.decov_chns = decov_chns
+        self.num_heads = num_heads
+
         self.model = MAEViTAutoEnc(
             in_channels=in_channels,
             img_size=img_size,
             patch_size=patch_size,
-            proj_type="conv",
-            hidden_size=768,
-            mlp_dim=3072,
+            proj_type=proj_type,
+            hidden_size=hidden_size,
+            mlp_dim=mlp_dim,
+            deconv_chns=decov_chns,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            training_unsupervised=True,
         )
-        self.batch_size = 4
-        self.number_workers = 4
-        self.cache_rate = 0.8
 
         self.recon_loss = nn.L1Loss()
         self.contrastive_loss = ContrastiveLoss(temperature=0.05)
         self.lr = lr
 
-        # base_data_path = Path(os.enviorn["DATA_PATH"])
         base_data_path = Path(os.getenv("DATA_PATH"))
-        data_dicts = _create_image_dict(base_data_path, is_testing=True)
+        data_dicts = _create_image_dict(base_data_path, is_testing=self.testing)
         train_image_paths, test_image_paths = train_test_split(
-            data_dicts, test_size=0.2
+            data_dicts, test_size=0.2, random_state=42
         )
 
         self.train_dataset = CacheDataset(
@@ -91,12 +122,25 @@ class LitAutoEncoder(pl.LightningModule):
         )
 
     def _get_train_transforms(self):
+        RandFlipd_prob = 0.5
         return Compose(
             [
                 # ModalityStackTransformd(keys=["image"]),
                 LoadImageD(keys=["image"], image_only=False),
-                DataStatsD(keys=["image"]),
+                # DataStatsD(keys=["image"]),
                 EnsureChannelFirstd(keys=["image"]),
+                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=0),
+                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=1),
+                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=2),
+                RandRotated(
+                    keys=["image"],
+                    range_x=15,
+                    range_y=15,
+                    range_z=15,
+                    prob=RandFlipd_prob,
+                ),
+                RandGaussianNoiseD(keys=["image"], prob=RandFlipd_prob / 2),
+                RandHistogramShiftD(keys=["image"], prob=RandFlipd_prob / 2),
                 CopyItemsd(
                     keys=["image"],
                     times=2,
@@ -148,17 +192,17 @@ class LitAutoEncoder(pl.LightningModule):
             batch["contrastive_patched"],
             batch["reference_patched"],
         )
-        # inputs, gt_input = batch['image'], batch['reference_patched']
-        #
-
-        outputs_v1, latent_v1 = self.forward(inputs)
-        outputs_v2, latent_v2 = self.forward(inputs_2)
+        outputs_v1, _ = self.forward(inputs)
+        outputs_v2, _ = self.forward(inputs_2)
         r_loss = self.recon_loss(outputs_v1, gt_input)
         cl_loss = self.contrastive_loss(
             outputs_v1.flatten(start_dim=1), outputs_v2.flatten(start_dim=1)
         )
         loss = r_loss + cl_loss * r_loss
         self.log("train_loss", loss)
+        self.log("recon_loss", r_loss)
+        self.log("contrastive_loss", cl_loss)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -166,26 +210,193 @@ class LitAutoEncoder(pl.LightningModule):
         outputs, _ = self.forward(inputs)
         val_loss = self.recon_loss(outputs, gt_input)
         self.log("val_loss", val_loss)
+        self.log("val_recon_loss", val_loss)
+        self.log("val_contrastive_loss", val_loss)
         return val_loss
 
     def configure_optimizers(self):
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
-    def save_latent_space(self, latent, filename):
-        torch.save(latent, filename)
 
+def train_model(
+    learning_rate: float,
+    batch_size: int,
+    epochs: int,
+    experiment_name: str,
+    in_channels: int,
+    hidden_size: int,
+    mlp_dim: int,
+    proj_type: str,
+    num_layers: int,
+    decov_chns: int,
+    num_heads: int,
+    patch_size: list,
+    testing: bool = False,
+):
+    # Environment configuration for CUDA
+    os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+    accelerator = os.environ.get("ACCELERATOR", "gpu")
+    gpu_id = os.environ.get("GPU_ID", "0")
 
-# Usage with your datasets
+    # Configure devices based on the accelerator type
+    devices = [int(gpu_id)] if accelerator != "cpu" else "auto"
+    using_multi_gpu = len(devices) > 1
+
+    print("*" * 80)
+    print(f"Cuda available: {torch.cuda.is_available()}")
+    print(f"Using Multi GPU: {using_multi_gpu}")
+    print(f"Devices: {devices}")
+    print(f"Accelerator: {accelerator}")
+    print("*" * 80)
+
+    log_every_n_steps = int((98 * 0.8) // batch_size)
+
+    # Instantiate the model
+    net = LitAutoEncoder(
+        img_size=(320, 320, 32),
+        patch_size=patch_size,
+        in_channels=in_channels,
+        hidden_size=hidden_size,
+        mlp_dim=mlp_dim,
+        proj_type=proj_type,
+        num_layers=num_layers,
+        decov_chns=decov_chns,
+        num_heads=num_heads,
+        lr=learning_rate,
+        testing=testing,
+    )
+
+    # Logging and checkpointing setup
+    current_file_loc = Path(__file__).parent
+    log_dir = current_file_loc / "UnsupervisedEncoderLogs"
+    log_dir.mkdir(exist_ok=True, parents=True)
+    tb_logger = TensorBoardLogger(save_dir=log_dir.as_posix(), name=experiment_name)
+
+    checkpoint_fn = experiment_name + "-checkpoint-{epoch:02d}-{val_loss:.2f}"
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss",
+        mode="min",
+        dirpath=log_dir.as_posix(),
+        filename=checkpoint_fn,
+    )
+
+    # Configure the trainer
+    trainer = pl.Trainer(
+        max_epochs=epochs,
+        logger=tb_logger,
+        accelerator=accelerator,
+        devices=devices,
+        enable_checkpointing=True,
+        num_sanity_val_steps=1,
+        log_every_n_steps=log_every_n_steps,
+        callbacks=[checkpoint_callback],
+    )
+
+    # Start training
+    trainer.fit(net)
 
 
 def do_main():
-
-    model = LitAutoEncoder(
-        img_size=(240, 240, 16), patch_size=(16, 16, 16), in_channels=1
+    parser = argparse.ArgumentParser(
+        description="Train the AutoEncoder with Vision Transformer."
     )
-    trainer = pl.Trainer(max_epochs=10, accelerator="cpu")
-    trainer.fit(model)
+    parser.add_argument(
+        "--patch_size",
+        type=int,
+        nargs="+",
+        default=[16, 16, 16],
+        help="Dimensions of each image patch.",
+    )
+    parser.add_argument(
+        "--hidden_size",
+        type=int,
+        default=768,
+        help="Hidden size for the transformer model.",
+    )
+    parser.add_argument(
+        "--mlp_dim",
+        type=int,
+        default=3072,
+        help="MLP dimension for the transformer model.",
+    )
+    parser.add_argument(
+        "--proj_type",
+        type=str,
+        default="conv",
+        help="Projection type for the transformer model.",
+    )
+    parser.add_argument(
+        "--num_layers",
+        type=int,
+        default=12,
+        help="Number of layers in the transformer model.",
+    )
+    parser.add_argument(
+        "--decov_chns",
+        type=int,
+        default=16,
+        help="Number of channels for the deconvolution layer.",
+    )
+    parser.add_argument(
+        "--num_heads",
+        type=int,
+        default=12,
+        help="Number of heads for the transformer model.",
+    )
+
+    parser.add_argument(
+        "--accelerator",
+        type=str,
+        default="cpu",
+        help='Type of accelerator to use for training (e.g., "cpu", "gpu").',
+    )
+    parser.add_argument(
+        "--experiment_name",
+        type=str,
+        default="UnsupervisedEncoder",
+        help="Name of the experiment to be logged.",
+    )
+
+    parser.add_argument(
+        "--batch_size", type=int, default=4, help="Batch size for training."
+    )
+    parser.add_argument(
+        "--in_channels",
+        type=int,
+        default=1,
+        help="Number of input channels in the image.",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=1e-4,
+        help="Learning rate for the optimizer.",
+    )
+    parser.add_argument(
+        "--max_epochs", type=int, default=10, help="Maximum number of epochs to train."
+    )
+    parser.add_argument(
+        "--testing", type=bool, default=False, help="Testing the model."
+    )
+
+    args = parser.parse_args()
+    train_model(
+        learning_rate=args.learning_rate,
+        batch_size=args.batch_size,
+        epochs=args.max_epochs,
+        experiment_name=args.experiment_name,
+        in_channels=args.in_channels,
+        hidden_size=args.hidden_size,
+        mlp_dim=args.mlp_dim,
+        proj_type=args.proj_type,
+        num_layers=args.num_layers,
+        decov_chns=args.decov_chns,
+        num_heads=args.num_heads,
+        patch_size=args.patch_size,
+        testing=args.testing,
+    )
 
 
 if __name__ == "__main__":
