@@ -82,6 +82,18 @@ class LitAutoEncoder(pl.LightningModule):
         self.num_layers = num_layers
         self.decov_chns = decov_chns
         self.num_heads = num_heads
+        self.save_hyperparameters(
+            "img_size",
+            "patch_size",
+            "in_channels",
+            "hidden_size",
+            "mlp_dim",
+            "proj_type",
+            "num_layers",
+            "decov_chns",
+            "num_heads",
+            "lr",
+        )
 
         self.model = MAEViTAutoEnc(
             in_channels=in_channels,
