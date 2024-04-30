@@ -357,13 +357,6 @@ def do_main():
         default=12,
         help="Number of heads for the transformer model.",
     )
-
-    parser.add_argument(
-        "--accelerator",
-        type=str,
-        default="cpu",
-        help='Type of accelerator to use for training (e.g., "cpu", "gpu").',
-    )
     parser.add_argument(
         "--experiment_name",
         type=str,
