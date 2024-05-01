@@ -8,6 +8,8 @@ from monai.networks.nets import ViTAutoEnc
 from sklearn.model_selection import train_test_split
 import unittest
 
+from torch import nn
+
 
 # TODO's are organized Highest Priority to Lowest Priority @ Joslin
 # Done Make Sure that reconstructed image is valid and has the same shape as the original image
@@ -75,6 +77,8 @@ class MAEViTAutoEnc(ViTAutoEnc):
             self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
                 self.index_order, test_size=self.mask_rate
             )
+            self.orig_image_size = img_size
+
         else:
             self.index_order = [i for i in range(number_of_patch_tensors)]
             self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
@@ -116,7 +120,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         x = torch.reshape(
             concated_masked, [concated_masked.shape[0], concated_masked.shape[1], *d]
         )
-        #decoder
+        # decoder
         x = self.decoder(x)
         return x, hidden_states_out
 
@@ -124,6 +128,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         x = self.conv3d_transpose(x)
         x = self.conv3d_transpose_1(x)
         return x
+
     def split_tensor_and_record_new_indexes(
         self, tensor: torch.Tensor, raw_positional_embeddings: torch.Tensor
     ):

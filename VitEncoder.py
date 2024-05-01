@@ -9,18 +9,18 @@ from monai.networks.blocks.transformerblock import TransformerBlock
 
 class ViTEncoder(nn.Module):
     def __init__(
-            self,
-            in_channels: int,
-            img_size: List[int] | int,
-            patch_size: List[int] | int,
-            hidden_size: int = 768,
-            mlp_dim: int = 3072,
-            num_layers: int = 12,
-            num_heads: int = 12,
-            proj_type: str = "conv",
-            pos_embed_type: str = "learnable",
-            dropout_rate: float = 0.0,
-            spatial_dims: int = 3,
+        self,
+        in_channels: int,
+        img_size: List[int] | int,
+        patch_size: List[int] | int,
+        hidden_size: int = 768,
+        mlp_dim: int = 3072,
+        num_layers: int = 12,
+        num_heads: int = 12,
+        proj_type: str = "conv",
+        pos_embed_type: str = "learnable",
+        dropout_rate: float = 0.0,
+        spatial_dims: int = 3,
     ) -> None:
         super().__init__()
         self.patch_embedding = PatchEmbeddingBlock(
@@ -35,7 +35,10 @@ class ViTEncoder(nn.Module):
             spatial_dims=spatial_dims,
         )
         self.blocks = nn.ModuleList(
-            [TransformerBlock(hidden_size, mlp_dim, num_heads, dropout_rate) for _ in range(num_layers)]
+            [
+                TransformerBlock(hidden_size, mlp_dim, num_heads, dropout_rate)
+                for _ in range(num_layers)
+            ]
         )
 
     def forward(self, x):
@@ -46,11 +49,15 @@ class ViTEncoder(nn.Module):
 
 
 class ViTDecoder(nn.Module):
-    def __init__(self, hidden_size: int, num_classes: int, post_activation: str = "Tanh") -> None:
+    def __init__(
+        self, hidden_size: int, num_classes: int, post_activation: str = "Tanh"
+    ) -> None:
         super().__init__()
         self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_size))
         if post_activation == "Tanh":
-            self.classification_head = nn.Sequential(nn.Linear(hidden_size, num_classes), nn.Tanh())
+            self.classification_head = nn.Sequential(
+                nn.Linear(hidden_size, num_classes), nn.Tanh()
+            )
         else:
             self.classification_head = nn.Linear(hidden_size, num_classes)
 
@@ -60,8 +67,11 @@ class ViTDecoder(nn.Module):
         x = self.classification_head(x[:, 0])
         return x
 
-if __name__ == '__main__':
-    encoder = ViTEncoder(in_channels=3, img_size=(3, 224, 224), patch_size=(3, 16, 16))  # Adjusted patch_size
+
+if __name__ == "__main__":
+    encoder = ViTEncoder(
+        in_channels=3, img_size=(3, 224, 224), patch_size=(3, 16, 16)
+    )  # Adjusted patch_size
     decoder = ViTDecoder(hidden_size=768, num_classes=2)
 
     x = torch.randn(1, 3, 224, 224)
