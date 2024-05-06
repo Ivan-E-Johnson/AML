@@ -2,7 +2,9 @@ import argparse
 import os
 from pathlib import Path
 
+import monai
 import pytorch_lightning as pl
+from matplotlib import pyplot as plt
 from monai.data import DataLoader, CacheDataset
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
@@ -65,11 +67,11 @@ class LitAutoEncoder(pl.LightningModule):
         num_layers,
         decov_chns,
         num_heads,
-        testing,
+        # testing,
         lr=1e-4,
     ):
         super().__init__()
-        self.testing = testing
+        self.testing = False
         self.batch_size = 4
         self.number_workers = 4
         self.cache_rate = 0.8
@@ -141,16 +143,16 @@ class LitAutoEncoder(pl.LightningModule):
                 LoadImageD(keys=["image"], image_only=False),
                 # DataStatsD(keys=["image"]),
                 EnsureChannelFirstd(keys=["image"]),
-                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=0),
-                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=1),
-                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=2),
-                RandRotated(
-                    keys=["image"],
-                    range_x=15,
-                    range_y=15,
-                    range_z=15,
-                    prob=RandFlipd_prob,
-                ),
+                # RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=0),
+                # RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=1),
+                # RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=2),
+                # RandRotated(
+                #     keys=["image"],
+                #     range_x=15,
+                #     range_y=15,
+                #     range_z=15,
+                #     prob=RandFlipd_prob,
+                # ),
                 RandGaussianNoiseD(keys=["image"], prob=RandFlipd_prob / 2),
                 RandHistogramShiftD(keys=["image"], prob=RandFlipd_prob / 2),
                 CopyItemsd(
@@ -219,7 +221,7 @@ class LitAutoEncoder(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         inputs, gt_input = batch["image"], batch["reference_patched"]
-        outputs, _ = self.forward(inputs)
+        outputs, latent_space = self.forward(inputs)
         val_loss = self.recon_loss(outputs, gt_input)
         self.log("val_loss", val_loss)
         self.log("val_recon_loss", val_loss)
@@ -229,6 +231,47 @@ class LitAutoEncoder(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
+
+    def on_validation_epoch_end(self) -> None:
+        val_loader = self.val_dataloader()
+        images, targets = (
+            next(iter(val_loader))["image"],
+            next(iter(val_loader))["reference_patched"],
+        )
+
+        # Move images and labels to device
+        images = images.to(self.device)
+        targets = targets.to(self.device)
+
+
+        # Onlys select the first image and label
+
+        # Run the inference
+        outputs, latent = self.forward(images)
+
+        # Log the latent space representation
+
+        self.logger.experiment.add_embedding(
+            latent,
+            metadata=range(latent.shape[0]),
+            global_step=self.current_epoch,
+        ) # Log the latent space representation??
+
+        # Log the images
+        monai.visualize.plot_2d_or_3d_image(
+            data=images,
+            tag=f"Original",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=outputs,
+            tag=f"Reconstruction",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            frame_dim=-1,
+        )
 
 
 def train_model(
@@ -308,6 +351,49 @@ def train_model(
 
     # Start training
     trainer.fit(net)
+
+import torchvision.utils as vutils
+def evaluate_model(checkpoint_path):
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")  # use the first GPU if available, otherwise use the CPU
+    model = LitAutoEncoder.load_from_checkpoint(checkpoint_path, map_location=device)  # ensure the model is loaded on the correct device
+    model.to(device)  # ensure the model is on the correct device
+    val_dataloader = model.val_dataloader()
+    model.eval()
+    model.freeze()
+
+    for batch in val_dataloader:
+        inputs, targets = batch["image"].to(device), batch["reference_patched"].to(device)
+        print(f"Input Shape: {inputs.shape}")
+        outputs, latent = model(targets)
+
+        print(f"Output Shape: {outputs.shape}")
+        visualize_output(targets, outputs)
+        break  # Just show one batch for example purposes
+
+def visualize_output(inputs, outputs, file_path=None):
+    inputs = inputs.detach().cpu()
+    outputs = outputs.detach().cpu()
+    print(f"Inputs Shape: {inputs.shape}")
+    print(f"Outputs Shape: {outputs.shape}")
+     # SELECT THE MIDDLE SLICE
+    midSlice = inputs.shape[-1] // 2
+    inputs = inputs[:, :, :, :,midSlice]
+    outputs = outputs[:, :, :, :,midSlice]
+    print(f"Inputs Shape: {inputs.shape}")
+    print(f"Outputs Shape: {outputs.shape}")
+
+    # Create a grid of images: original, reconstructed, difference
+    for i in range(inputs.shape[0]):
+        # Remove unneeded channel dim
+        images = torch.stack([inputs[i], outputs[i]], dim=0)
+
+        print(f"Images Shape: {images.shape}")
+        grid = vutils.make_grid(images, nrow=2, normalize=True, scale_each=True)
+        plt.imshow(grid.permute(1, 2, 0).cpu().numpy())
+        plt.show()
+
+
+
 
 
 def do_main():
@@ -405,4 +491,7 @@ def do_main():
 
 
 if __name__ == "__main__":
-    do_main()
+    # do_main()
+    # evaluate_model("/home/iejohnson/programing/Supervised_learning/AML/Unsupervised/UnsupervisedEncoderLogs/Unsupervised_16_layer_heads-checkpoint-epoch=1208-val_loss=0.35.ckpt")
+    evaluate_model("/localscratch/Users/iejohnson/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt")
+
