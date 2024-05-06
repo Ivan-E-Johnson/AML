@@ -120,8 +120,10 @@ class MAEViTAutoEnc(ViTAutoEnc):
         x = torch.reshape(
             concated_masked, [concated_masked.shape[0], concated_masked.shape[1], *d]
         )
+        print(f"Shape of x: {x.shape}")
         # decoder
         x = self.decoder(x)
+        print(f"Shape of x after decoder: {x.shape}")
         return x, hidden_states_out
 
     def decoder(self, x):

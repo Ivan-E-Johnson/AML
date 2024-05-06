@@ -71,7 +71,7 @@ class LitAutoEncoder(pl.LightningModule):
         lr=1e-4,
     ):
         super().__init__()
-        self.testing = True
+        self.testing = testing
         self.batch_size = 4
         self.number_workers = 4
         self.cache_rate = 0.8
@@ -250,13 +250,6 @@ class LitAutoEncoder(pl.LightningModule):
         # Run the inference
         outputs, latent = self.forward(images)
 
-        # Log the latent space representation
-
-        # self.logger.experiment.add_embedding(
-        #     latent,
-        #     metadata=range(latent.shape[0]),
-        #     global_step=self.current_epoch,
-        # ) # Log the latent space representation??
 
         # Log the images
         monai.visualize.plot_2d_or_3d_image(
