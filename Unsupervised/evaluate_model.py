@@ -17,7 +17,7 @@ from monai.data import DataLoader, CacheDataset
 def load_model(checkpoint_path):
     model = LitAutoEncoder.load_from_checkpoint(
         checkpoint_path,
-        img_size=(240, 240, 16),
+        img_size=(320, 320, 32),
         patch_size=(16, 16, 16),
         in_channels=1
     )
@@ -75,10 +75,13 @@ def prepare_data():
 
 def simple_test_visualization():
     # Load NIfTI image
-    image_path = "/home/jsome/PycharmProjects/AML Recent/pythonProject/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed/ProstateX-0004/ProstateX-0004_pp_t2w.nii.gz"
+    base_pp_with_seg_path = Path(os.environ["PP_WITH_SEGMENTATION_PATH"])
+    # base_pp_with_seg_path = Path("/localscratch/Users/iejohnson/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed/ProstateX-0004")
+    subject_id = "ProstateX-0004"
+    image_path = base_pp_with_seg_path /f"{subject_id}/{subject_id}_pp_t2w.nii.gz"
 
     # Load NIfTI segmentation label
-    label_path = ("/home/jsome/PycharmProjects/AML Recent/pythonProject/DATA/ALL_PROSTATEx/WITH_SEGMENTATION/PreProcessed/ProstateX-0004/ProstateX-0004_pp_segmentation.nii.gz")
+    label_path = base_pp_with_seg_path / f"{subject_id}/{subject_id}_pp_segmentation.nii.gz"
 
     # Load image and label data
     image_data = nib.load(image_path).get_fdata()
@@ -188,9 +191,9 @@ def visualize_labels(image_data, label_data, prediction_data):
 
 
 if __name__ == "__main__":
-    saved_model_path = (
-        "lightning_logs/best-model-699-0.77|700..epoch_run.ckpt"  # Path to the saved model
-    )
+    # saved_model_path = (
+    #     "lightning_logs/best-model-699-0.77|700..epoch_run.ckpt"  # Path to the saved model
+    # )
     # model = load_model(saved_model_path)
     # dataloader = prepare_data()
     # evaluate_model(model, dataloader)
