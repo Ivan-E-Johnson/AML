@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 from monai.data import DataLoader, CacheDataset
+from pytorch_lightning.callbacks import ModelCheckpoint
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
 from mae_vit_model import MAEViTAutoEnc
@@ -35,7 +36,7 @@ def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
     data_dicts = []
     for dir in base_data_path.iterdir():
         if dir.is_dir():
-            data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz"})
+            data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz", "label": dir / f"{dir.name}_pp_segmentation.nii.gz"}) # adding ground truth here to be able to evaluate the model later
     if is_testing:
         data_dicts = data_dicts[:10]
     return data_dicts
@@ -184,7 +185,16 @@ def do_main():
     model = LitAutoEncoder(
         img_size=(240, 240, 16), patch_size=(16, 16, 16), in_channels=1
     )
-    trainer = pl.Trainer(max_epochs=10, accelerator="cpu")
+    max_epochs = 700
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_loss',  # Name of the metric to monitor
+        dirpath='/home/jsome/PycharmProjects/AML Recent/pythonProject/AML/Unsupervised/lightning_logs',
+        filename='best-model-{epoch:02d}-{val_loss:.2f}|'+str(max_epochs)+"..epoch_run",  # Filename format
+        save_top_k=1,  # Save the top k models
+        mode='min',  # Minimize the monitored metric (val_loss)
+        auto_insert_metric_name=False  # Prevents appending the metric name to the filepath
+    )
+    trainer = pl.Trainer(max_epochs=max_epochs, accelerator="cpu", callbacks=[checkpoint_callback])
     trainer.fit(model)
 
 

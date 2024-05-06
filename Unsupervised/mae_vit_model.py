@@ -93,14 +93,11 @@ class MAEViTAutoEnc(ViTAutoEnc):
         raw_patched_image_with_embeddings = self.patch_embedding(x)
         raw_positional_embeddings = self.patch_embedding.position_embeddings
         masked_patches = raw_positional_embeddings.repeat(batch_size, 1, 1)
-        if self.training_unsupervised:
 
-            unmasked_tensor, masked_patches = self.split_tensor_and_record_new_indexes(
-                raw_patched_image_with_embeddings, masked_patches
-            )
-        else:
-            unmasked_tensor = raw_patched_image_with_embeddings
-        # Masked patches
+        unmasked_tensor, masked_patches = self.split_tensor_and_record_new_indexes(
+            raw_patched_image_with_embeddings, masked_patches
+        )
+      # Masked patches
 
         hidden_states_out = []
         for blk in self.blocks:
