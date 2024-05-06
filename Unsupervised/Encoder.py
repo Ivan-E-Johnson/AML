@@ -95,9 +95,9 @@ class LitAutoEncoder(pl.LightningModule):
         return Compose(
             [
                 # ModalityStackTransformd(keys=["image"]),
-                LoadImageD(keys=["image"], image_only=False),
+                LoadImageD(keys=["image", "label"], image_only=False),
                 DataStatsD(keys=["image"]),
-                EnsureChannelFirstd(keys=["image"]),
+                EnsureChannelFirstd(keys=["image", "label"]),
                 CopyItemsd(
                     keys=["image"],
                     times=2,
@@ -127,7 +127,7 @@ class LitAutoEncoder(pl.LightningModule):
                 RandCoarseShuffled(
                     keys=["contrastive_patched"], prob=0.8, holes=10, spatial_size=8
                 ),
-                ToTensord(keys=["image", "reference_patched", "contrastive_patched"]),
+                ToTensord(keys=["image", "label", "reference_patched", "contrastive_patched"]),
                 # SaveImageD(keys=["contrastive_patched"], folder_layout=layout),
             ]
         )
