@@ -67,11 +67,11 @@ class LitAutoEncoder(pl.LightningModule):
         num_layers,
         decov_chns,
         num_heads,
-        # testing,
+        testing,
         lr=1e-4,
     ):
         super().__init__()
-        self.testing = False
+        self.testing = True
         self.batch_size = 4
         self.number_workers = 4
         self.cache_rate = 0.8
@@ -222,6 +222,7 @@ class LitAutoEncoder(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         inputs, gt_input = batch["image"], batch["reference_patched"]
         outputs, latent_space = self.forward(inputs)
+        print(f"Output Shape: {outputs.shape}")
         val_loss = self.recon_loss(outputs, gt_input)
         self.log("val_loss", val_loss)
         self.log("val_recon_loss", val_loss)
@@ -251,11 +252,11 @@ class LitAutoEncoder(pl.LightningModule):
 
         # Log the latent space representation
 
-        self.logger.experiment.add_embedding(
-            latent,
-            metadata=range(latent.shape[0]),
-            global_step=self.current_epoch,
-        ) # Log the latent space representation??
+        # self.logger.experiment.add_embedding(
+        #     latent,
+        #     metadata=range(latent.shape[0]),
+        #     global_step=self.current_epoch,
+        # ) # Log the latent space representation??
 
         # Log the images
         monai.visualize.plot_2d_or_3d_image(
@@ -491,7 +492,7 @@ def do_main():
 
 
 if __name__ == "__main__":
-    # do_main()
+    do_main()
     # evaluate_model("/home/iejohnson/programing/Supervised_learning/AML/Unsupervised/UnsupervisedEncoderLogs/Unsupervised_16_layer_heads-checkpoint-epoch=1208-val_loss=0.35.ckpt")
-    evaluate_model("/localscratch/Users/iejohnson/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt")
+    # evaluate_model("/localscratch/Users/iejohnson/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt")
 
