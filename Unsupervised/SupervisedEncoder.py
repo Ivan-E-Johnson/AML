@@ -2,6 +2,8 @@ import argparse
 import os
 from pathlib import Path
 
+import monai
+import numpy as np
 import pytorch_lightning as pl
 from monai.data import DataLoader, CacheDataset
 from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
@@ -44,14 +46,22 @@ from pytorch_lightning.loggers import TensorBoardLogger
 load_dotenv()
 
 
-def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
-    data_dicts = []
+def _create_image_dict(
+    base_data_path: Path, is_testing: bool = False
+) -> tuple[list, list]:
+    image_data_dicts = []
+    label_data_dicts = []
+
     for dir in base_data_path.iterdir():
         if dir.is_dir():
-            data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz"})
+            image_data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz"})
+            label_data_dicts.append(
+                {"label": dir / f"{dir.name}_pp_segmentation.nii.gz"}
+            )
     if is_testing:
-        data_dicts = data_dicts[:10]
-    return data_dicts
+        image_data_dicts = image_data_dicts[:10]
+        label_data_dicts = label_data_dicts[:10]
+    return image_data_dicts, label_data_dicts
 
 
 class VitSupervisedAutoEncoder(pl.LightningModule):
@@ -66,13 +76,14 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         num_layers,
         decov_chns,
         num_heads,
-        testing,
+        testing=True,
         lr=1e-4,
+        out_channels=5,
     ):
         super().__init__()
         self.testing = testing
         self.batch_size = 4
-        self.number_workers = 4
+        self.number_workers = 11
         self.cache_rate = 0.8
         self.hidden_size = hidden_size
         self.mlp_dim = mlp_dim
@@ -96,7 +107,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             "lr",
         )
 
-        self.model = MAEViTAutoEnc(
+        self.model = ViTAutoEnc(
             in_channels=in_channels,
             img_size=img_size,
             patch_size=patch_size,
@@ -106,8 +117,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             deconv_chns=decov_chns,
             num_layers=num_layers,
             num_heads=num_heads,
-            training_unsupervised=True,
-            out_channels=1,  ## Adjust as needed
+            out_channels=out_channels,  ## Adjust as needed
         )
 
         self.recon_loss = nn.L1Loss()
@@ -115,7 +125,14 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.lr = lr
 
         base_data_path = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
-        data_dicts = _create_image_dict(base_data_path, is_testing=self.testing)
+        image_data_dict, label_data_dict = _create_image_dict(
+            base_data_path, is_testing=self.testing
+        )
+        data_dicts = [
+            dict(**image, **label)
+            for image, label in zip(image_data_dict, label_data_dict)
+        ]
+
         train_image_paths, test_image_paths = train_test_split(
             data_dicts, test_size=0.2, random_state=42
         )
@@ -129,7 +146,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         )
         self.val_dataset = CacheDataset(
             data=test_image_paths,
-            transform=self._get_train_transforms(),
+            transform=self._get_val_transforms(),
             cache_rate=self.cache_rate,
             num_workers=self.number_workers,
             runtime_cache=True,
@@ -202,6 +219,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
+        outputs_v1 = torch.sigmoid(outputs_v1)
         # TODO RUN PCA ON HIDDEN STATES ect
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
@@ -222,6 +240,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
+        outputs_v1 = torch.softmax(outputs_v1, dim=1)
         # TODO RUN PCA ON HIDDEN STATES ect
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
@@ -232,14 +251,60 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.log("val_combined_loss", loss)
         self.log("val_dice_loss", diceCE_loss)
         self.log("val_tv_loss", tv_loss)
-        self.log("val_hausdorff_distance", hausdorff_metric)
-        self.log("val_dice_metric", dice_metric)
+        self.log("val_hausdorff_distance", hausdorff_metric.mean())
+        self.log("val_dice_metric", dice_metric.mean())
 
         return loss
 
     def configure_optimizers(self):
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
+
+    def on_validation_epoch_end(self):
+        torch.no_grad()
+        # Get the first batch of the validation data
+        val_loader = self.val_dataloader()
+        images, labels = (
+            next(iter(val_loader))["image"],
+            next(iter(val_loader))["label"],
+        )
+
+        # Move images and labels to device
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+
+        # Onlys select the first image and label
+
+        # Run the inference
+        # TODO RUN PCA ON HIDDEN STATES ect
+        outputs, hidden_states = self.forward(images)
+
+        # TODO @JOSLIN can you figure out why we are getting
+        #  Outputs values: [-910.33405 -904.64087 -879.9035  ...  351.73096  354.75842  491.39194]
+        #  EXPECTED: [0, 1, 2, 3, 4]
+        print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
+        print(f"Output shape: {outputs.shape}")
+        print(f"Labels shape: {labels.shape}")
+        print(f"Images shape: {images.shape}")
+
+        monai.visualize.plot_2d_or_3d_image(
+            data=labels,
+            tag=f"Labels",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            # max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=outputs,
+            tag=f"Predictions",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            # max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
+
+        torch.enable_grad()
 
 
 def train_model(
@@ -275,36 +340,51 @@ def train_model(
     print("*" * 80)
 
     log_every_n_steps = int((98 * 0.8) // batch_size)
-
-    # Instantiate the model
-    # TODO load model from checkpoint!!!!!!
-    # IF NOT THROW ERROR
     net = VitSupervisedAutoEncoder(
         img_size=(320, 320, 32),
         patch_size=patch_size,
         in_channels=in_channels,
-        hidden_size=hidden_size,
+        hidden_size=hidden_size,  # Ensure this matches the hidden_size used when the checkpoint was saved
         mlp_dim=mlp_dim,
         proj_type=proj_type,
-        num_layers=num_layers,
-        decov_chns=decov_chns,
-        num_heads=num_heads,
+        num_layers=num_layers,  # Ensure this matches the num_layers used when the checkpoint was saved
+        decov_chns=decov_chns,  # Ensure this matches the decov_chns used when the checkpoint was saved
+        num_heads=num_heads,  # Ensure this matches the num_heads used when the checkpoint was saved
         lr=learning_rate,
         testing=testing,
     )
 
-    # Logging and checkpointing setup
+    # Then load the state_dict from the checkpoint
+
+    checkpoint = torch.load(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/AML_Project_Supervised/Unsupervised/UnsupervisedVITAutoEncoderLogs/UnsupervisedVITAutoEncoderLogs-checkpoint-epoch=05-val_loss=0.84.ckpt",
+        map_location="gpu" if torch.cuda.is_available() else "cpu",
+    )
+    net.load_state_dict(checkpoint["state_dict"], strict=False, assign=True)
+
     current_file_loc = Path(__file__).parent
-    log_dir = current_file_loc / "UnsupervisedEncoderLogs"
+    log_dir = current_file_loc / "SupervisedEncoderLogs"
     log_dir.mkdir(exist_ok=True, parents=True)
     tb_logger = TensorBoardLogger(save_dir=log_dir.as_posix(), name=experiment_name)
 
-    checkpoint_fn = experiment_name + "-checkpoint-{epoch:02d}-{val_loss:.2f}"
+    loss_checkpoint_fn = experiment_name + "-checkpoint-{epoch:02d}-{val_loss:.2f}"
+    dice_checkpoint_fn = (
+        experiment_name + "-checkpoint-{epoch:02d}-{val_dice_metric:.2f}"
+    )
+    top_k = 3
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_loss",
+        monitor="val_combined_loss",
         mode="min",
         dirpath=log_dir.as_posix(),
-        filename=checkpoint_fn,
+        filename=loss_checkpoint_fn,
+        save_top_k=top_k,
+    )
+    best_model_checkpoint = ModelCheckpoint(
+        monitor="val_dice_metric",
+        mode="max",
+        dirpath=log_dir.as_posix(),
+        filename=dice_checkpoint_fn,
+        save_top_k=top_k,
     )
 
     # Configure the trainer
@@ -395,7 +475,10 @@ def do_main():
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
-        "--max_epochs", type=int, default=10, help="Maximum number of epochs to train."
+        "--max_epochs",
+        type=int,
+        default=1000,
+        help="Maximum number of epochs to train.",
     )
     parser.add_argument(
         "--testing", type=bool, default=False, help="Testing the model."

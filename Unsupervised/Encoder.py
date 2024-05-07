@@ -97,7 +97,7 @@ class LitAutoEncoder(pl.LightningModule):
             "lr",
         )
 
-        self.model = MAEViTAutoEnc(
+        self.model = ViTAutoEnc(
             in_channels=in_channels,
             img_size=img_size,
             patch_size=patch_size,
@@ -107,7 +107,6 @@ class LitAutoEncoder(pl.LightningModule):
             deconv_chns=decov_chns,
             num_layers=num_layers,
             num_heads=num_heads,
-            training_unsupervised=True,
         )
 
         self.recon_loss = nn.L1Loss()
@@ -143,8 +142,8 @@ class LitAutoEncoder(pl.LightningModule):
                 LoadImageD(keys=["image"], image_only=False),
                 # DataStatsD(keys=["image"]),
                 EnsureChannelFirstd(keys=["image"]),
-                # RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=0),
-                # RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=1),
+                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=0),
+                RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=1),
                 # RandFlipd(keys=["image"], prob=RandFlipd_prob, spatial_axis=2),
                 # RandRotated(
                 #     keys=["image"],
@@ -164,28 +163,57 @@ class LitAutoEncoder(pl.LightningModule):
                 OneOf(
                     transforms=[
                         RandCoarseDropoutd(
-                            keys=["contrastive_patched"],
+                            keys=["image"],
                             prob=1.0,
-                            holes=6,
-                            spatial_size=5,
+                            holes=16,
+                            spatial_size=4,
                             dropout_holes=True,
-                            max_spatial_size=32,
+                            fill_value=0,
+                            max_spatial_size=16,
                         ),
                         RandCoarseDropoutd(
-                            keys=["contrastive_patched"],
+                            keys=["image"],
                             prob=1.0,
-                            holes=6,
-                            spatial_size=20,
+                            holes=10,
+                            spatial_size=4,
+                            fill_value=0,
                             dropout_holes=False,
-                            max_spatial_size=64,
+                            max_spatial_size=32,
                         ),
                     ]
                 ),
                 RandCoarseShuffled(
-                    keys=["contrastive_patched"], prob=0.8, holes=10, spatial_size=8
+                    keys=["image"], prob=0.25, holes=3, spatial_size=8, max_holes=7
+                ),
+                OneOf(
+                    transforms=[
+                        RandCoarseDropoutd(
+                            keys=["contrastive_patched"],
+                            prob=1.0,
+                            holes=16,
+                            spatial_size=4,
+                            dropout_holes=True,
+                            fill_value=0,
+                            max_spatial_size=16,
+                        ),
+                        RandCoarseDropoutd(
+                            keys=["contrastive_patched"],
+                            prob=1.0,
+                            holes=10,
+                            spatial_size=4,
+                            dropout_holes=False,
+                            max_spatial_size=32,
+                        ),
+                    ]
+                ),
+                RandCoarseShuffled(
+                    keys=["contrastive_patched"],
+                    prob=0.5,
+                    holes=5,
+                    spatial_size=8,
+                    max_holes=7,
                 ),
                 ToTensord(keys=["image", "reference_patched", "contrastive_patched"]),
-                # SaveImageD(keys=["contrastive_patched"], folder_layout=layout),
             ]
         )
 
@@ -206,8 +234,8 @@ class LitAutoEncoder(pl.LightningModule):
             batch["contrastive_patched"],
             batch["reference_patched"],
         )
-        outputs_v1, _ = self.forward(inputs)
-        outputs_v2, _ = self.forward(inputs_2)
+        outputs_v1, hidden_state = self.forward(inputs)
+        outputs_v2, hidden_state = self.forward(inputs_2)
         r_loss = self.recon_loss(outputs_v1, gt_input)
         cl_loss = self.contrastive_loss(
             outputs_v1.flatten(start_dim=1), outputs_v2.flatten(start_dim=1)
@@ -235,30 +263,46 @@ class LitAutoEncoder(pl.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         val_loader = self.val_dataloader()
-        images, targets = (
+        images, contrastive, targets = (
             next(iter(val_loader))["image"],
+            next(iter(val_loader))["contrastive_patched"],
             next(iter(val_loader))["reference_patched"],
         )
 
         # Move images and labels to device
         images = images.to(self.device)
+        contrastive = contrastive.to(self.device)
         targets = targets.to(self.device)
-
 
         # Onlys select the first image and label
 
         # Run the inference
         outputs, latent = self.forward(images)
-
+        outputs_contrastive, latent_contrastive = self.forward(contrastive)
 
         # Log the images
         monai.visualize.plot_2d_or_3d_image(
-            data=images,
+            data=targets,
             tag=f"Original",
             step=self.current_epoch,
             writer=self.logger.experiment,
             frame_dim=-1,
         )
+        monai.visualize.plot_2d_or_3d_image(
+            data=images,
+            tag=f"Input",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=contrastive,
+            tag=f"Contrastive",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            frame_dim=-1,
+        )
+
         monai.visualize.plot_2d_or_3d_image(
             data=outputs,
             tag=f"Reconstruction",
@@ -319,7 +363,7 @@ def train_model(
 
     # Logging and checkpointing setup
     current_file_loc = Path(__file__).parent
-    log_dir = current_file_loc / "UnsupervisedEncoderLogs"
+    log_dir = current_file_loc / "UnsupervisedVITAutoEncoderLogs"
     log_dir.mkdir(exist_ok=True, parents=True)
     tb_logger = TensorBoardLogger(save_dir=log_dir.as_posix(), name=experiment_name)
 
@@ -346,17 +390,26 @@ def train_model(
     # Start training
     trainer.fit(net)
 
+
 import torchvision.utils as vutils
+
+
 def evaluate_model(checkpoint_path):
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")  # use the first GPU if available, otherwise use the CPU
-    model = LitAutoEncoder.load_from_checkpoint(checkpoint_path, map_location=device)  # ensure the model is loaded on the correct device
+    device = torch.device(
+        "cuda:0" if torch.cuda.is_available() else "cpu"
+    )  # use the first GPU if available, otherwise use the CPU
+    model = LitAutoEncoder.load_from_checkpoint(
+        checkpoint_path, map_location=device
+    )  # ensure the model is loaded on the correct device
     model.to(device)  # ensure the model is on the correct device
     val_dataloader = model.val_dataloader()
     model.eval()
     model.freeze()
 
     for batch in val_dataloader:
-        inputs, targets = batch["image"].to(device), batch["reference_patched"].to(device)
+        inputs, targets = batch["image"].to(device), batch["reference_patched"].to(
+            device
+        )
         print(f"Input Shape: {inputs.shape}")
         outputs, latent = model(targets)
 
@@ -364,15 +417,16 @@ def evaluate_model(checkpoint_path):
         visualize_output(targets, outputs)
         break  # Just show one batch for example purposes
 
+
 def visualize_output(inputs, outputs, file_path=None):
     inputs = inputs.detach().cpu()
     outputs = outputs.detach().cpu()
     print(f"Inputs Shape: {inputs.shape}")
     print(f"Outputs Shape: {outputs.shape}")
-     # SELECT THE MIDDLE SLICE
+    # SELECT THE MIDDLE SLICE
     midSlice = inputs.shape[-1] // 2
-    inputs = inputs[:, :, :, :,midSlice]
-    outputs = outputs[:, :, :, :,midSlice]
+    inputs = inputs[:, :, :, :, midSlice]
+    outputs = outputs[:, :, :, :, midSlice]
     print(f"Inputs Shape: {inputs.shape}")
     print(f"Outputs Shape: {outputs.shape}")
 
@@ -385,9 +439,6 @@ def visualize_output(inputs, outputs, file_path=None):
         grid = vutils.make_grid(images, nrow=2, normalize=True, scale_each=True)
         plt.imshow(grid.permute(1, 2, 0).cpu().numpy())
         plt.show()
-
-
-
 
 
 def do_main():
@@ -440,7 +491,7 @@ def do_main():
     parser.add_argument(
         "--experiment_name",
         type=str,
-        default="UnsupervisedEncoder",
+        default="UnsupervisedVITAutoEncoderLogs",
         help="Name of the experiment to be logged.",
     )
 
@@ -488,4 +539,3 @@ if __name__ == "__main__":
     do_main()
     # evaluate_model("/home/iejohnson/programing/Supervised_learning/AML/Unsupervised/UnsupervisedEncoderLogs/Unsupervised_16_layer_heads-checkpoint-epoch=1208-val_loss=0.35.ckpt")
     # evaluate_model("/localscratch/Users/iejohnson/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt")
-
