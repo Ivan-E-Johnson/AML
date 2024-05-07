@@ -2,6 +2,8 @@ import argparse
 import os
 from pathlib import Path
 
+import monai
+import numpy as np
 import pytorch_lightning as pl
 from monai.data import DataLoader, CacheDataset
 from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
@@ -80,7 +82,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         super().__init__()
         self.testing = testing
         self.batch_size = 4
-        self.number_workers = 4
+        self.number_workers = 11
         self.cache_rate = 0.8
         self.hidden_size = hidden_size
         self.mlp_dim = mlp_dim
@@ -256,6 +258,52 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
+    def on_validation_epoch_end(self):
+        torch.no_grad()
+        # Get the first batch of the validation data
+        val_loader = self.val_dataloader()
+        images, labels = (
+            next(iter(val_loader))["image"],
+            next(iter(val_loader))["label"],
+        )
+
+        # Move images and labels to device
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+
+        # Onlys select the first image and label
+
+        # Run the inference
+        # TODO RUN PCA ON HIDDEN STATES ect
+        outputs, hidden_states = self.forward(images)
+
+        # TODO @JOSLIN can you figure out why we are getting
+        #  Outputs values: [-910.33405 -904.64087 -879.9035  ...  351.73096  354.75842  491.39194]
+        #  EXPECTED: [0, 1, 2, 3, 4]
+        print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
+        print(f"Output shape: {outputs.shape}")
+        print(f"Labels shape: {labels.shape}")
+        print(f"Images shape: {images.shape}")
+
+        monai.visualize.plot_2d_or_3d_image(
+            data=labels,
+            tag=f"Labels",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            # max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
+        monai.visualize.plot_2d_or_3d_image(
+            data=outputs,
+            tag=f"Predictions",
+            step=self.current_epoch,
+            writer=self.logger.experiment,
+            # max_channels=self.number_of_classes,
+            frame_dim=-1,
+        )
+
+        torch.enable_grad()
+
 
 def train_model(
     learning_rate: float,
@@ -309,7 +357,7 @@ def train_model(
     # Then load the state_dict from the checkpoint
     checkpoint = torch.load(
         "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/AML_Project_Supervised/Unsupervised/Results/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt",
-        map_location="cpu",
+        map_location="gpu" if torch.cuda.is_available() else "cpu",
     )
     net.load_state_dict(checkpoint["state_dict"], strict=False)
     # Logging and checkpointing setup
