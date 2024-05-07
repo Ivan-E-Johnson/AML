@@ -44,14 +44,22 @@ from pytorch_lightning.loggers import TensorBoardLogger
 load_dotenv()
 
 
-def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
-    data_dicts = []
+def _create_image_dict(
+    base_data_path: Path, is_testing: bool = False
+) -> tuple[list, list]:
+    image_data_dicts = []
+    label_data_dicts = []
+
     for dir in base_data_path.iterdir():
         if dir.is_dir():
-            data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz"})
+            image_data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz"})
+            label_data_dicts.append(
+                {"label": dir / f"{dir.name}_pp_segmentation.nii.gz"}
+            )
     if is_testing:
-        data_dicts = data_dicts[:10]
-    return data_dicts
+        image_data_dicts = image_data_dicts[:10]
+        label_data_dicts = label_data_dicts[:10]
+    return image_data_dicts, label_data_dicts
 
 
 class VitSupervisedAutoEncoder(pl.LightningModule):
@@ -115,7 +123,14 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.lr = lr
 
         base_data_path = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
-        data_dicts = _create_image_dict(base_data_path, is_testing=self.testing)
+        image_data_dict, label_data_dict = _create_image_dict(
+            base_data_path, is_testing=self.testing
+        )
+        data_dicts = [
+            dict(**image, **label)
+            for image, label in zip(image_data_dict, label_data_dict)
+        ]
+
         train_image_paths, test_image_paths = train_test_split(
             data_dicts, test_size=0.2, random_state=42
         )
@@ -129,7 +144,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         )
         self.val_dataset = CacheDataset(
             data=test_image_paths,
-            transform=self._get_train_transforms(),
+            transform=self._get_val_transforms(),
             cache_rate=self.cache_rate,
             num_workers=self.number_workers,
             runtime_cache=True,
@@ -212,8 +227,8 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.log("train_combined_loss", loss)
         self.log("train_dice_loss", diceCE_loss)
         self.log("train_tv_loss", tv_loss)
-        self.log("train_hausdorff_distance", hausdorff_metric)
-        self.log("train_dice_metric", dice_metric)
+        self.log("train_hausdorff_distance", hausdorff_metric.mean())  # This
+        self.log("train_dice_metric", dice_metric.mean())
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -232,8 +247,8 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.log("val_combined_loss", loss)
         self.log("val_dice_loss", diceCE_loss)
         self.log("val_tv_loss", tv_loss)
-        self.log("val_hausdorff_distance", hausdorff_metric)
-        self.log("val_dice_metric", dice_metric)
+        self.log("val_hausdorff_distance", hausdorff_metric.mean())
+        self.log("val_dice_metric", dice_metric.mean())
 
         return loss
 
@@ -276,35 +291,51 @@ def train_model(
 
     log_every_n_steps = int((98 * 0.8) // batch_size)
 
-    # Instantiate the model
-    # TODO load model from checkpoint!!!!!!
-    # IF NOT THROW ERROR
+    # Ensure the model architecture matches the one used when the checkpoint was saved
     net = VitSupervisedAutoEncoder(
         img_size=(320, 320, 32),
         patch_size=patch_size,
         in_channels=in_channels,
-        hidden_size=hidden_size,
+        hidden_size=hidden_size,  # Ensure this matches the hidden_size used when the checkpoint was saved
         mlp_dim=mlp_dim,
         proj_type=proj_type,
-        num_layers=num_layers,
-        decov_chns=decov_chns,
-        num_heads=num_heads,
+        num_layers=num_layers,  # Ensure this matches the num_layers used when the checkpoint was saved
+        decov_chns=decov_chns,  # Ensure this matches the decov_chns used when the checkpoint was saved
+        num_heads=num_heads,  # Ensure this matches the num_heads used when the checkpoint was saved
         lr=learning_rate,
         testing=testing,
     )
 
+    # Then load the state_dict from the checkpoint
+    checkpoint = torch.load(
+        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/AML_Project_Supervised/Unsupervised/Results/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt",
+        map_location="cpu",
+    )
+    net.load_state_dict(checkpoint["state_dict"], strict=False)
     # Logging and checkpointing setup
     current_file_loc = Path(__file__).parent
-    log_dir = current_file_loc / "UnsupervisedEncoderLogs"
+    log_dir = current_file_loc / "SupervisedEncoderLogs"
     log_dir.mkdir(exist_ok=True, parents=True)
     tb_logger = TensorBoardLogger(save_dir=log_dir.as_posix(), name=experiment_name)
 
-    checkpoint_fn = experiment_name + "-checkpoint-{epoch:02d}-{val_loss:.2f}"
+    loss_checkpoint_fn = experiment_name + "-checkpoint-{epoch:02d}-{val_loss:.2f}"
+    dice_checkpoint_fn = (
+        experiment_name + "-checkpoint-{epoch:02d}-{val_dice_metric:.2f}"
+    )
+    top_k = 3
     checkpoint_callback = ModelCheckpoint(
-        monitor="val_loss",
+        monitor="val_combined_loss",
         mode="min",
         dirpath=log_dir.as_posix(),
-        filename=checkpoint_fn,
+        filename=loss_checkpoint_fn,
+        save_top_k=top_k,
+    )
+    best_model_checkpoint = ModelCheckpoint(
+        monitor="val_dice_metric",
+        mode="max",
+        dirpath=log_dir.as_posix(),
+        filename=dice_checkpoint_fn,
+        save_top_k=top_k,
     )
 
     # Configure the trainer
@@ -337,13 +368,13 @@ def do_main():
     parser.add_argument(
         "--hidden_size",
         type=int,
-        default=768,
+        default=1536,
         help="Hidden size for the transformer model.",
     )
     parser.add_argument(
         "--mlp_dim",
         type=int,
-        default=3072,
+        default=6144,
         help="MLP dimension for the transformer model.",
     )
     parser.add_argument(
@@ -355,7 +386,7 @@ def do_main():
     parser.add_argument(
         "--num_layers",
         type=int,
-        default=12,
+        default=24,
         help="Number of layers in the transformer model.",
     )
     #### NOTE DECONV(DECODER) ARE WHAT MAKES THIS SUPERVISED ####
@@ -363,7 +394,7 @@ def do_main():
     parser.add_argument(
         "--decov_chns",
         type=int,
-        default=24,
+        default=16,
         help="Number of channels for the deconvolution layer.",
     )
     parser.add_argument(
@@ -395,7 +426,10 @@ def do_main():
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
-        "--max_epochs", type=int, default=10, help="Maximum number of epochs to train."
+        "--max_epochs",
+        type=int,
+        default=1000,
+        help="Maximum number of epochs to train.",
     )
     parser.add_argument(
         "--testing", type=bool, default=False, help="Testing the model."
