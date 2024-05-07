@@ -122,11 +122,17 @@ class MAEViTAutoEnc(ViTAutoEnc):
         )
         # decoder
         x = self.decoder(x)
-        return x, hidden_states_out
+        # if self.training_unsupervised:
+        #     return x, hidden_states_out
+        print("----------------------------------sadasdsa----------------------------------")
+        probabilities, hidden_states = x, hidden_states_out
+        predicted_labels = torch.argmax(probabilities, dim=1)
+        return predicted_labels, hidden_states
 
     def decoder(self, x):
         x = self.conv3d_transpose(x)
         x = self.conv3d_transpose_1(x)
+        x = x.unsqueeze(1)
         return x
 
     def split_tensor_and_record_new_indexes(

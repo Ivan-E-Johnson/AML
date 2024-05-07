@@ -219,6 +219,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
+        outputs_v1 = outputs_v1.float()
         # TODO RUN PCA ON HIDDEN STATES ect
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
@@ -239,6 +240,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
+        outputs_v1 = outputs_v1.float()
         # TODO RUN PCA ON HIDDEN STATES ect
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
@@ -356,8 +358,8 @@ def train_model(
 
     # Then load the state_dict from the checkpoint
     checkpoint = torch.load(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/AML_Project_Supervised/Unsupervised/Results/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt",
-        map_location="gpu" if torch.cuda.is_available() else "cpu",
+        "/home/jsome/PycharmProjects/AML Recent/pythonProject/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_double_hiddensize_mlp_5000e-checkpoint-epoch=4831-val_loss=0.40.ckpt",
+        map_location="cuda" if torch.cuda.is_available() else "cpu",
     )
     net.load_state_dict(checkpoint["state_dict"], strict=False)
     # Logging and checkpointing setup
