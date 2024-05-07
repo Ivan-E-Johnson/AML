@@ -11,11 +11,9 @@ class SplitAutoEncoder(nn.Module):
         self.patch_size = patch_size
 
     def forward(self, x):
-        print(f"Orig X Shape: {x.shape}")
         spatial_size = x.shape[2:]
         x, down_x = self.encoder(x)
 
-        print(f"X Shape: {x.shape}")
         # print(f"Down X Shape: {down_x}")
         x = self.norm(x)
         x = x.transpose(1, 2)

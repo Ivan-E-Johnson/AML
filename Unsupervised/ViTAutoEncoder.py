@@ -8,7 +8,7 @@ from monai.data import DataLoader, CacheDataset
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
 
-from Unsupervised.CustomModels import SplitAutoEncoder, CustomDecoder
+from CustomModels import SplitAutoEncoder, CustomDecoder
 from monai.networks.nets import ViT
 import torch.nn as nn
 from monai.losses import ContrastiveLoss
@@ -60,12 +60,13 @@ class ViTAutoEncoder(pl.LightningModule):
         deconv_chns,
         num_heads,
         testing,
+        batch_size,
         lr=1e-4,
     ):
         super().__init__()
         self.testing = testing
-        self.batch_size = 4
-        self.number_workers = 4
+        self.batch_size = batch_size
+        self.number_workers = 10
         self.cache_rate = 0.8
         self.hidden_size = hidden_size
         self.mlp_dim = mlp_dim
@@ -183,12 +184,12 @@ class ViTAutoEncoder(pl.LightningModule):
                             spatial_size=4,
                             fill_value=0,
                             dropout_holes=False,
-                            max_spatial_size=32,
+                            max_spatial_size=16,
                         ),
                     ]
                 ),
                 RandCoarseShuffled(
-                    keys=["image"], prob=0.25, holes=3, spatial_size=8, max_holes=7
+                    keys=["image"], prob=0.1, holes=3, spatial_size=8, max_holes=7
                 ),
                 OneOf(
                     transforms=[
@@ -374,6 +375,7 @@ def train_model(
         num_heads=num_heads,
         lr=learning_rate,
         testing=testing,
+        batch_size=batch_size,
     )
 
     # Logging and checkpointing setup
@@ -399,6 +401,7 @@ def train_model(
         enable_checkpointing=True,
         num_sanity_val_steps=1,
         log_every_n_steps=log_every_n_steps,
+        reload_dataloaders_every_n_epochs=50,
         callbacks=[checkpoint_callback],
     )
 
@@ -425,10 +428,8 @@ def evaluate_model(checkpoint_path):
         inputs, targets = batch["image"].to(device), batch["reference_patched"].to(
             device
         )
-        print(f"Input Shape: {inputs.shape}")
         outputs, latent = model(targets)
 
-        print(f"Output Shape: {outputs.shape}")
         visualize_output(targets, outputs)
         break  # Just show one batch for example purposes
 
@@ -436,7 +437,6 @@ def evaluate_model(checkpoint_path):
 def visualize_output(inputs, outputs, file_path=None):
     inputs = inputs.detach().cpu()
     outputs = outputs.detach().cpu()
-    print(f"Inputs Shape: {inputs.shape}")
     print(f"Outputs Shape: {outputs.shape}")
     # SELECT THE MIDDLE SLICE
     midSlice = inputs.shape[-1] // 2
@@ -547,6 +547,7 @@ def do_main():
         num_heads=args.num_heads,
         patch_size=args.patch_size,
         testing=args.testing,
+        
     )
 
 
