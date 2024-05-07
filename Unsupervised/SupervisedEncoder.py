@@ -356,8 +356,8 @@ def train_model(
 
     # Then load the state_dict from the checkpoint
     checkpoint = torch.load(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/AML_Project_Supervised/Unsupervised/Results/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt",
-        map_location="gpu" if torch.cuda.is_available() else "cpu",
+        "/home/ssome/PycharmProjects/pythonProject/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt",
+        map_location="cuda"
     )
     net.load_state_dict(checkpoint["state_dict"], strict=False)
     # Logging and checkpointing setup

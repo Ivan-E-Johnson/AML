@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 
 import pytorch_lightning as pl
+from matplotlib import pyplot as plt
 from monai.data import DataLoader, CacheDataset
+from pytorch_msssim import ssim
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
 from mae_vit_model import MAEViTAutoEnc
@@ -199,33 +201,21 @@ class LitAutoEncoder(pl.LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
-        inputs, inputs_2, gt_input = (
-            batch["image"],
-            batch["contrastive_patched"],
-            batch["reference_patched"],
-        )
-        outputs_v1, _ = self.forward(inputs)
-        outputs_v2, _ = self.forward(inputs_2)
-        r_loss = self.recon_loss(outputs_v1, gt_input)
-        cl_loss = self.contrastive_loss(
-            outputs_v1.flatten(start_dim=1), outputs_v2.flatten(start_dim=1)
-        )
-        loss = r_loss + cl_loss * r_loss
+        inputs, gt_input = batch["image"], batch["reference_patched"]
+        outputs, _ = self.forward(inputs)
+        ssim_loss = 1 - ssim(outputs, gt_input, data_range=1,
+                             size_average=True)  # Assuming your data is normalized to [0,1]
+        loss = ssim_loss
         self.log("train_loss", loss)
-        self.log("recon_loss", r_loss)
-        self.log("contrastive_loss", cl_loss)
-
         return loss
+
 
     def validation_step(self, batch, batch_idx):
         inputs, gt_input = batch["image"], batch["reference_patched"]
         outputs, _ = self.forward(inputs)
-        val_loss = self.recon_loss(outputs, gt_input)
-        self.log("val_loss", val_loss)
-        self.log("val_recon_loss", val_loss)
-        self.log("val_contrastive_loss", val_loss)
-        return val_loss
-
+        ssim_loss = 1 - ssim(outputs, gt_input, data_range=1, size_average=True)
+        self.log("val_loss", ssim_loss)
+        return ssim_loss
     def configure_optimizers(self):
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
@@ -324,7 +314,7 @@ def do_main():
     parser.add_argument(
         "--hidden_size",
         type=int,
-        default=768,
+        default=1024,
         help="Hidden size for the transformer model.",
     )
     parser.add_argument(
@@ -342,7 +332,7 @@ def do_main():
     parser.add_argument(
         "--num_layers",
         type=int,
-        default=12,
+        default=24,
         help="Number of layers in the transformer model.",
     )
     parser.add_argument(
@@ -354,7 +344,7 @@ def do_main():
     parser.add_argument(
         "--num_heads",
         type=int,
-        default=12,
+        default=16,
         help="Number of heads for the transformer model.",
     )
     parser.add_argument(
@@ -403,6 +393,77 @@ def do_main():
         testing=args.testing,
     )
 
+import torchvision.utils as vutils
+def evaluate_model(checkpoint_path):
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")  # use the first GPU if available, otherwise use the CPU
+    model = LitAutoEncoder.load_from_checkpoint(
+        checkpoint_path,
+        map_location=device,
+        testing=True  # Adjust this based on your needs
+    )
+    model.to(device)  # ensure the model is on the correct device
+    val_dataloader = model.val_dataloader()
+    model.eval()
+    model.freeze()
+
+    for batch in val_dataloader:
+        inputs, targets = batch["image"].to(device), batch["reference_patched"].to(device)
+        print(f"Input Shape: {inputs.shape}")
+        outputs, latent = model(targets)
+
+        print(f"Output Shape: {outputs.shape}")
+        visualize_output(targets, outputs)
+        break  # Just show one batch for example purposes
+
+
+def visualize_output(inputs, outputs, num_images=5):
+
+    inputs = inputs.detach().cpu().numpy()
+    outputs = outputs.detach().cpu().numpy()
+
+    fig, axs = plt.subplots(nrows=num_images, ncols=2, figsize=(10, num_images * 5))
+
+    for i in range(num_images):
+        # Check if we have fewer images than num_images
+        if i >= inputs.shape[0]:
+            break
+
+        # Assuming images are in [C, H, W] format and grayscale
+        ax = axs[i, 0]
+        ax.imshow(inputs[i].squeeze(), cmap='gray', aspect='auto')
+        ax.set_title('Original Image')
+        ax.axis('off')
+
+        ax = axs[i, 1]
+        ax.imshow(outputs[i].squeeze(), cmap='gray', aspect='auto')
+        ax.set_title('Reconstructed Image')
+        ax.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+def visualize_output(inputs, outputs, file_path=None):
+    inputs = inputs.detach().cpu()
+    outputs = outputs.detach().cpu()
+    print(f"Inputs Shape: {inputs.shape}")
+    print(f"Outputs Shape: {outputs.shape}")
+     # SELECT THE MIDDLE SLICE
+    midSlice = inputs.shape[-1] // 2
+    inputs = inputs[:, :, :, :,midSlice]
+    outputs = outputs[:, :, :, :,midSlice]
+    print(f"Inputs Shape: {inputs.shape}")
+    print(f"Outputs Shape: {outputs.shape}")
+
+    # Create a grid of images: original, reconstructed, difference
+    for i in range(inputs.shape[0]):
+        # Remove unneeded channel dim
+        images = torch.stack([inputs[i], outputs[i]], dim=0)
+
+        print(f"Images Shape: {images.shape}")
+        grid = vutils.make_grid(images, nrow=2, normalize=True, scale_each=True)
+        plt.imshow(grid.permute(1, 2, 0).cpu().numpy())
+        plt.show()
+
 
 if __name__ == "__main__":
     do_main()
+    # evaluate_model('/home/ssome/PycharmProjects/pythonProject/AML/Unsupervised/UnsupervisedEncoderLogs/UnsupervisedEncoder-checkpoint-epoch=09-val_loss=0.77.ckpt')
