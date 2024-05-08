@@ -11,15 +11,6 @@ import unittest
 from torch import nn
 
 
-# TODO's are organized Highest Priority to Lowest Priority @ Joslin
-# Done Make Sure that reconstructed image is valid and has the same shape as the original image
-# Done This class is a bit of a hack. It should be refactored to be more general and possibly moved into the Autoencoder class
-# TODO Figure out L1 loss and Contrastive Loss and make a tldr for the team
-# TODO make the env file example and update the Encoder to use the .env file
-# TODO Test to see if we can use the stacked images as the input to the model -- I will probably end up doing this
-# TODO Figure out where the "latent space" is and how to get it / visualize it
-
-
 class MAEViTAutoEnc(ViTAutoEnc):
     """
     Vision Transformer (ViT),  That will be used for A Masked Autoencoder
@@ -208,10 +199,14 @@ class MAEViTAutoEnc(ViTAutoEnc):
             raise ValueError(
                 "The batch dimension of the masked tensor and the normalized tensor must be the same"
             )
-        print("----------------------STARTING RECONSTRUCTION----------------------------------")
+        print(
+            "----------------------STARTING RECONSTRUCTION----------------------------------"
+        )
         print(f"Shape of normalized tensor: {normalized_x.shape}")
         print(f"Shape of original tensor: {orig_tensor.shape}")
-        print("-----------------------END RECONSTRUCTION---------------------------------")
+        print(
+            "-----------------------END RECONSTRUCTION---------------------------------"
+        )
 
         # Use an index mapping to reconstruct the image
         reconstructed_image = torch.zeros_like(orig_tensor)
@@ -226,6 +221,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         for orig_index, new_index in self.unmasked_index_mapping.items():
             reconstructed_image[:, orig_index, :] = normalized_x[:, new_index, :]
         return reconstructed_image
+
 
 # Unit tests for the MAEViTAutoEnc class
 class TestMaskMapper(unittest.TestCase):
@@ -270,6 +266,7 @@ class TestMaskMapper(unittest.TestCase):
                 f"Mismatch at unmasked index {new_index}",
             )
 
+
 class TestMAEViTAutoEncReconstruction(unittest.TestCase):
     def setUp(self):
         # Initialize the model with a controlled configuration
@@ -283,15 +280,21 @@ class TestMAEViTAutoEncReconstruction(unittest.TestCase):
             num_heads=1,
             deconv_chns=16,
             training_unsupervised=True,
-            test=True  # Ensure we're in testing mode if needed
+            test=True,  # Ensure we're in testing mode if needed
         )
         # Manually set the mask and unmasked indices for predictable behavior
         self.model.orig_masked_indexes = [1, 3]  # Indices of patches that are masked
-        self.model.orig_unmasked_indexes = [0, 2, 4]  # Indices of patches that are unmasked
+        self.model.orig_unmasked_indexes = [
+            0,
+            2,
+            4,
+        ]  # Indices of patches that are unmasked
 
         # Mock data for masked and unmasked patches
-        self.masked_tensor = torch.tensor([[1000., 1000.], [3000., 3000.]])
-        self.normalized_x = torch.tensor([[0., 0.], [2000., 2000.], [4000., 4000.]])
+        self.masked_tensor = torch.tensor([[1000.0, 1000.0], [3000.0, 3000.0]])
+        self.normalized_x = torch.tensor(
+            [[0.0, 0.0], [2000.0, 2000.0], [4000.0, 4000.0]]
+        )
         self.orig_tensor = torch.zeros((1, 5, 2))  # Simulate an original tensor
 
         # Set these tensors in the model for direct access
@@ -300,15 +303,30 @@ class TestMAEViTAutoEncReconstruction(unittest.TestCase):
 
     def test_reconstruct_image(self):
         # Perform the reconstruction
-        reconstructed = self.model.reconstruct_image(self.normalized_x, self.orig_tensor)
+        reconstructed = self.model.reconstruct_image(
+            self.normalized_x, self.orig_tensor
+        )
 
         # Expected reconstructed image based on the set indices
-        expected_tensor = torch.tensor([[0., 0.], [1000., 1000.], [2000., 2000.], [3000., 3000.], [4000., 4000.]])
-        expected_tensor = expected_tensor.unsqueeze(0)  # Adding batch dimension for comparison
+        expected_tensor = torch.tensor(
+            [
+                [0.0, 0.0],
+                [1000.0, 1000.0],
+                [2000.0, 2000.0],
+                [3000.0, 3000.0],
+                [4000.0, 4000.0],
+            ]
+        )
+        expected_tensor = expected_tensor.unsqueeze(
+            0
+        )  # Adding batch dimension for comparison
 
         # Verify the reconstructed tensor matches the expected tensor
-        self.assertTrue(torch.equal(reconstructed, expected_tensor),
-                        f"Reconstructed tensor does not match expected output. Got {reconstructed}")
+        self.assertTrue(
+            torch.equal(reconstructed, expected_tensor),
+            f"Reconstructed tensor does not match expected output. Got {reconstructed}",
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
