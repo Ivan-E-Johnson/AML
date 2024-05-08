@@ -348,6 +348,7 @@ def train_model(
     decov_chns: int,
     encoder_path: str,
     testing: bool = False,
+    load_checkpoint: bool = False,
 ):
     # Environment configuration for CUDA
     os.environ["PYTORCH_USE_CUDA_DSA"] = "1"
@@ -367,12 +368,20 @@ def train_model(
     print("*" * 80)
 
     log_every_n_steps = int((98 * 0.8) // batch_size)
-    net = BackBoneUNETR(
-        encoder_path=encoder_path,
-        decov_chns=decov_chns,  # Ensure this matches the decov_chns used when the checkpoint was saved
-        lr=learning_rate,
-        testing=testing,
-    )
+    if load_checkpoint:
+        # Load the model from the checkpoint
+        net = BackBoneUNETR.load_from_checkpoint(
+            checkpoint_path=load_checkpoint,
+            encoder_path=encoder_path,
+            batch_size=5,  # Override the batch size so dont Run out of memory
+        )
+    else:
+        net = BackBoneUNETR(
+            encoder_path=encoder_path,
+            decov_chns=decov_chns,  # Ensure this matches the decov_chns used when the checkpoint was saved
+            lr=learning_rate,
+            testing=testing,
+        )
     # Create a directory to store the logs
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "UNETR-Logs" / experiment_name
@@ -461,6 +470,12 @@ def do_main():
     parser.add_argument(
         "--testing", type=bool, default=False, help="Testing the model."
     )
+    parser.add_argument(
+        "--load_checkpoint",
+        type=bool,
+        default=False,
+        help="Load a checkpoint for training.",
+    )
 
     args = parser.parse_args()
     train_model(
@@ -471,6 +486,7 @@ def do_main():
         decov_chns=args.decov_chns,
         testing=args.testing,
         encoder_path=args.encoder_path,
+        load_checkpoint=args.load_checkpoint,
     )
 
 
