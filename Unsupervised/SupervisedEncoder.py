@@ -95,11 +95,21 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.patch_size = checkpoint["hyper_parameters"]["patch_size"]
         self.in_channels = checkpoint["hyper_parameters"]["in_channels"]
         self.image_size = checkpoint["hyper_parameters"]["img_size"]
+        self.mlp_dim = checkpoint["hyper_parameters"]["mlp_dim"]
+        self.num_heads = checkpoint["hyper_parameters"]["num_heads"]
+        self.num_layers = checkpoint["hyper_parameters"]["num_layers"]
+        self.proj_type = checkpoint["hyper_parameters"]["proj_type"]
 
+        print(f"hidden_size: {self.hidden_size}")
         self.encoder = ViT(
             in_channels=self.in_channels,
             img_size=self.image_size,
             patch_size=self.patch_size,
+            hidden_size=self.hidden_size,
+            mlp_dim=self.mlp_dim,
+            num_heads=self.num_heads,
+            num_layers=self.num_layers,
+            proj_type=self.proj_type
         )
         self.encoder.load_state_dict(
             checkpoint["state_dict"], strict=False, assign=True
@@ -128,7 +138,8 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             decoder=self.Decoder,
             hidden_size=self.hidden_size,
             patch_size=self.patch_size,
-        )
+            classification=True,
+            )
 
         self.lr = lr
 
