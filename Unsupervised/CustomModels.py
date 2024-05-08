@@ -1,16 +1,27 @@
 import torch
+from monai.networks.blocks import UnetrPrUpBlock
 from monai.networks.layers import Norm, Act
 from monai.networks.nets.flexible_unet import UNetDecoder
 from torch import nn as nn
 
+from monai.networks.layers.utils import get_act_layer, get_norm_layer
+from monai.networks.blocks.segresnet_block import (
+    ResBlock,
+    get_conv_layer,
+    get_upsample_layer,
+)
+
 
 class SplitAutoEncoder(nn.Module):
-    def __init__(self, encoder, decoder, hidden_size, patch_size):
+    def __init__(
+        self, encoder, decoder, hidden_size, patch_size, pass_hidden_to_decoder=False
+    ):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.norm = nn.LayerNorm(hidden_size)
         self.patch_size = patch_size
+        self.pass_hidden_to_decoder = pass_hidden_to_decoder
 
     def forward(self, x):
         spatial_size = x.shape[2:]
@@ -21,7 +32,10 @@ class SplitAutoEncoder(nn.Module):
         x = x.transpose(1, 2)
         d = [s // p for s, p in zip(spatial_size, self.patch_size)]
         x = torch.reshape(x, [x.shape[0], x.shape[1], *d])
-        x = self.decoder(x)
+        if self.pass_hidden_to_decoder:
+            x = self.decoder(x, down_x)
+        else:
+            x = self.decoder(x)
         return x, down_x
 
 
@@ -50,8 +64,8 @@ class CustomDecoder(nn.Module):
             kernel_size=up_kernel_size,
             stride=up_kernel_size,
         )
-        # Optionally add normalization and activation layers if needed
         self.activation = nn.LeakyReLU()
+        # Optionally add normalization and activation layers if needed
         self.normalize1 = nn.BatchNorm3d(decov_chns)
         self.normalize2 = nn.BatchNorm3d(out_channels)
         self.classification = classsification
@@ -70,47 +84,93 @@ class CustomDecoder(nn.Module):
         return x
 
 
-# class ClassificationDecoder(nn.Module):
-#     def __init__(self, hidden_size, decov_chns, up_kernel_size, out_channels, dropout_rate=0.1,
-#                  classification=False):
-#         super(CustomDecoder, self).__init__()
-#         conv_trans = nn.ConvTranspose3d  # Using 3D convolution transpose as assumed
-#         self.up1 = conv_trans(in_channels=hidden_size, out_channels=decov_chns, kernel_size=up_kernel_size,
-#                               stride=2)
-#         self.norm1 = Norm.BATCH(decov_chns)  # Using Monai's batch normalization
-#         self.act1 = Act.RELU()  # Using Monai's ReLU activation
-#         self.dropout1 = nn.Dropout3d(dropout_rate)  # Adding dropout layer for regularization
-#
-#         # Adjusting in_channels to account for concatenated skip connection
-#         self.up2 = conv_trans(in_channels=decov_chns + hidden_size, out_channels=out_channels,
-#                               kernel_size=up_kernel_size, stride=2)
-#         self.norm2 = Norm.BATCH(out_channels)  # Adding normalization to the second layer
-#         self.act2 = Act.RELU()  # Activation for the second layer
-#         self.dropout2 = nn.Dropout3d(dropout_rate)  # Dropout for the second layer
-#
-#         self.classification = classification
-#
-#     def forward(self, x, encoder_features):
-#
-#         for i in range(len(encoder_features)):
-#             print(f"Encoder Features: {encoder_features[i].shape}")
-#             x
-#
-#         # Up-sampling and integrating first set of features
-#         x = self.up1(x)
-#         x = self.norm1(x)
-#         x = self.act1(x)
-#         x = self.dropout1(x)
-#
-#         # Concatenate the corresponding encoder features with the current state
-#         if len(encoder_features) > 0:
-#             x = torch.cat([x, encoder_features[0]], dim=1)  # Adjust dimension as needed
-#
-#         # Second up-sampling and integration
-#         x = self.up2(x)
-#         x = self.norm2(x)
-#         x = self.act2(x)
-#         x = self.dropout2(x)
-#
-#         return x
-#
+class CustomDecoder3D(nn.Module):
+    def __init__(
+        self,
+        hidden_size,
+        initial_channels,
+        final_channels,
+        patch_size,
+        img_dim,
+        num_up_blocks=2,
+        kernel_size=3,
+        upsample_kernel_size=2,
+        norm_name="batch",
+        conv_block=True,
+        res_block=True,
+    ):
+        super().__init__()
+
+        # Calculate the number of patches and the dimensionality of each patch feature
+        # Assuming img_dim is a tuple (D, H, W)
+        self.num_patches = (
+            (img_dim[0] // patch_size[0])
+            * (img_dim[1] // patch_size[1])
+            * (img_dim[2] // patch_size[2])
+        )
+        self.hidden_size = hidden_size
+        self.final_channels = final_channels
+        self.num_up_blocks = num_up_blocks
+        self.kernel_size = kernel_size
+        self.upsample_kernel_size = upsample_kernel_size
+        self.norm_name = norm_name
+        self.patch_size = patch_size
+        self.img_dim = img_dim
+
+        # Initial layer to reshape and upsample the sequence to a feature map
+        self.initial_upsample = nn.ConvTranspose3d(
+            in_channels=hidden_size,
+            out_channels=initial_channels,
+            kernel_size=patch_size,
+            stride=patch_size,
+        )
+
+        # Upsampling blocks
+        self.blocks = nn.ModuleList()
+        current_channels = initial_channels
+        for _ in range(num_up_blocks):
+            out_channels = current_channels // 2  # Example for channel reduction
+            block = UnetrPrUpBlock(
+                spatial_dims=3,  # Since it's 3D
+                in_channels=current_channels,
+                out_channels=out_channels,
+                num_layer=1,
+                kernel_size=kernel_size,
+                stride=1,
+                upsample_kernel_size=upsample_kernel_size,
+                norm_name=norm_name,
+                conv_block=conv_block,
+                res_block=res_block,
+            )
+            self.blocks.append(block)
+            current_channels = out_channels
+
+        # Final layer to match the desired output channels
+        self.final_conv = nn.Conv3d(current_channels, final_channels, kernel_size=1)
+
+    def forward(self, x, down_x):
+        # Process input through the initial upsample
+        print(f"Original X Shape: {x.shape}")
+        print(f"Original Down X Shape: {down_x[0].shape}")
+        batch_size = x.shape[0]
+        x = x.permute(0, 2, 1).reshape(
+            batch_size, self.initial_channels, *self.patch_size
+        )
+        print(f"X After Reshaping Shape: {x.shape}")
+        x = self.initial_upsample(x)
+        print(f"X After Initial Upsample Shape: {x.shape}")
+
+        # Iterate over blocks, adding skip connections
+        for block, dx in zip(self.blocks, down_x):
+            print(f"X Shape: {x.shape} | DX Shape: {dx.shape}")
+            x = torch.cat([x, dx], dim=1)  # Concatenate feature maps from encoder
+            print(f"X After Concatenation Shape: {x.shape}")
+            x = block(x)
+
+        x = self.final_conv(x)
+        print(f"X After Final Conv Shape: {x.shape}")
+        return x
+
+    import torch
+    import torch.nn as nn
+    from torch.nn.functional import interpolate

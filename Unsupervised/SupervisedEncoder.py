@@ -4,7 +4,7 @@ import os
 from PIL import Image
 import io
 from pathlib import Path
-from CustomModels import CustomDecoder, SplitAutoEncoder
+from CustomModels import CustomDecoder, SplitAutoEncoder, CustomDecoder3D
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import monai
@@ -41,13 +41,14 @@ from monai.transforms import (
 )
 from dotenv import load_dotenv
 import os
-
+from torchviz import make_dot
 import os
 from pathlib import Path
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
+
 
 from support_functions import (
     convert_logits_to_one_hot,
@@ -127,6 +128,19 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             )
         )
         self.up_kernel_size = [int(math.sqrt(i)) for i in self.patch_size]
+        # self.Decoder = CustomDecoder3D(
+        #     hidden_size=self.hidden_size,
+        #     initial_channels=self.deconv_chns,
+        #     final_channels=out_channels,
+        #     patch_size=self.patch_size,
+        #     img_dim=self.image_size,
+        #     num_up_blocks=2,  # Example
+        #     kernel_size=3,
+        #     upsample_kernel_size=self.up_kernel_size,
+        #     norm_name="batch",
+        #     conv_block=True,
+        #     res_block=True,
+        # )
         self.Decoder = CustomDecoder(
             hidden_size=self.hidden_size,
             decov_chns=self.deconv_chns,
@@ -141,6 +155,8 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             hidden_size=self.hidden_size,
             patch_size=self.patch_size,
         )
+
+        # make_dot(self.model, params=dict(self.model.named_parameters())).render( "SupervisedBackbonedAutoEncoder", format="png")
 
         self.lr = lr
 
