@@ -173,23 +173,14 @@ class ViTAutoEncoder(pl.LightningModule):
                             prob=1.0,
                             holes=16,
                             spatial_size=4,
-                            dropout_holes=True,
                             fill_value=0,
-                            max_spatial_size=16,
-                        ),
-                        RandCoarseDropoutd(
-                            keys=["image"],
-                            prob=1.0,
-                            holes=10,
-                            spatial_size=4,
-                            fill_value=0,
-                            dropout_holes=False,
-                            max_spatial_size=16,
+                            max_spatial_size=32,
+                            max_holes=200
                         ),
                     ]
                 ),
                 RandCoarseShuffled(
-                    keys=["image"], prob=0.1, holes=3, spatial_size=8, max_holes=7
+                    keys=["image"], prob=0.5, holes=3, spatial_size=8, max_holes=7
                 ),
                 OneOf(
                     transforms=[
@@ -198,24 +189,16 @@ class ViTAutoEncoder(pl.LightningModule):
                             prob=1.0,
                             holes=16,
                             spatial_size=4,
-                            dropout_holes=True,
                             fill_value=0,
-                            max_spatial_size=16,
-                        ),
-                        RandCoarseDropoutd(
-                            keys=["contrastive_patched"],
-                            prob=1.0,
-                            holes=10,
-                            spatial_size=4,
-                            dropout_holes=False,
                             max_spatial_size=32,
+                            max_holes=200
                         ),
                     ]
                 ),
                 RandCoarseShuffled(
                     keys=["contrastive_patched"],
                     prob=0.5,
-                    holes=5,
+                    holes=2,
                     spatial_size=8,
                     max_holes=7,
                 ),
