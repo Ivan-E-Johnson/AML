@@ -62,3 +62,8 @@ class CustomDecoder(nn.Module):
         ):  # Assuming you want to add an activation function at the end
             x = self.activation(x)
         return x
+
+
+class ClassificationDecoder(nn.Module):
+    def __init__(self, hidden_size, decov_chns, up_kernel_size, out_channels):
+        super().__init__()
