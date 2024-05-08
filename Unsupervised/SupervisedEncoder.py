@@ -109,7 +109,8 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             mlp_dim=self.mlp_dim,
             num_heads=self.num_heads,
             num_layers=self.num_layers,
-            proj_type=self.proj_type
+            proj_type=self.proj_type,
+            # classification=True,
         )
         self.encoder.load_state_dict(
             checkpoint["state_dict"], strict=False, assign=True
@@ -131,6 +132,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             decov_chns=self.deconv_chns,
             up_kernel_size=self.up_kernel_size,
             out_channels=out_channels,
+            classsification=True,
         )
 
         self.model = SplitAutoEncoder(
@@ -138,8 +140,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             decoder=self.Decoder,
             hidden_size=self.hidden_size,
             patch_size=self.patch_size,
-            classification=True,
-            )
+        )
 
         self.lr = lr
 
