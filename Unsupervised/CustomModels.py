@@ -22,7 +22,7 @@ class SplitAutoEncoder(nn.Module):
         decoder,
         hidden_size,
         patch_size,
-        freeze_encoder,
+        freeze_encoder=False,
         pass_hidden_to_decoder=False,
     ):
         super().__init__()
