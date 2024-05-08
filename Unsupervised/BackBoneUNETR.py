@@ -371,7 +371,7 @@ def train_model(
     )
 
     current_file_loc = Path(__file__).parent
-    log_dir = current_file_loc / "SupervisedEncoderLogs"
+    log_dir = current_file_loc / "UNETR-Logs" / experiment_name
     log_dir.mkdir(exist_ok=True, parents=True)
     tb_logger = TensorBoardLogger(save_dir=log_dir.as_posix(), name=experiment_name)
 
@@ -427,7 +427,7 @@ def do_main():
     parser.add_argument(
         "--experiment_name",
         type=str,
-        default="UnsupervisedEncoder",
+        default="BACKBONE_UNETR",
         help="Name of the experiment to be logged.",
     )
     parser.add_argument(
