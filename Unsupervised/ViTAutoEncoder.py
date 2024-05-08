@@ -174,8 +174,8 @@ class ViTAutoEncoder(pl.LightningModule):
                             holes=16,
                             spatial_size=4,
                             fill_value=0,
-                            max_spatial_size=32,
-                            max_holes=200
+                            max_spatial_size=[16,16,8],
+                            max_holes=150
                         ),
                     ]
                 ),
@@ -191,7 +191,7 @@ class ViTAutoEncoder(pl.LightningModule):
                             spatial_size=4,
                             fill_value=0,
                             max_spatial_size=32,
-                            max_holes=200
+                            max_holes=150
                         ),
                     ]
                 ),
