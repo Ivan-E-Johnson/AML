@@ -1,6 +1,8 @@
 import argparse
+import math
 import os
 from pathlib import Path
+from CustomModels import CustomDecoder, SplitAutoEncoder
 
 import monai
 import numpy as np
@@ -10,7 +12,7 @@ from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMe
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
 from mae_vit_model import MAEViTAutoEnc
-from monai.networks.nets import ViTAutoEnc
+from monai.networks.nets import ViTAutoEnc, ViT
 import torch.nn as nn
 from monai.losses import ContrastiveLoss, DiceCELoss, TverskyLoss
 import torch
@@ -43,6 +45,12 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
+from support_functions import (
+    convert_logits_to_one_hot,
+    convert_AutoEncoder_output_to_labelpred,
+    view_middle_slice,
+)
+
 load_dotenv()
 
 
@@ -65,17 +73,11 @@ def _create_image_dict(
 
 
 class VitSupervisedAutoEncoder(pl.LightningModule):
+
     def __init__(
         self,
-        img_size,
-        patch_size,
-        in_channels,
-        hidden_size,
-        mlp_dim,
-        proj_type,
-        num_layers,
-        decov_chns,
-        num_heads,
+        encoder_path: str,
+        decov_chns: int,
         testing=True,
         lr=1e-4,
         out_channels=5,
@@ -85,43 +87,46 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.batch_size = 4
         self.number_workers = 11
         self.cache_rate = 0.8
-        self.hidden_size = hidden_size
-        self.mlp_dim = mlp_dim
-        self.proj_type = proj_type
-        self.in_channels = in_channels
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_layers = num_layers
-        self.decov_chns = decov_chns
-        self.num_heads = num_heads
+        checkpoint = torch.load(encoder_path, map_location=lambda storage, loc: storage)
+        self.hidden_size = checkpoint["hyper_parameters"]["hidden_size"]
+        self.patch_size = checkpoint["hyper_parameters"]["patch_size"]
+        self.in_channels = checkpoint["hyper_parameters"]["in_channels"]
+        self.image_size = checkpoint["hyper_parameters"]["img_size"]
+
+        self.encoder = ViT(
+            in_channels=self.in_channels,
+            img_size=self.image_size,
+            patch_size=self.patch_size,
+        )
+        self.encoder.load_state_dict(
+            checkpoint["state_dict"], strict=False, assign=True
+        )
+
+        self.deconv_chns = decov_chns
         self.save_hyperparameters(
-            "img_size",
-            "patch_size",
-            "in_channels",
-            "hidden_size",
-            "mlp_dim",
-            "proj_type",
-            "num_layers",
-            "decov_chns",
-            "num_heads",
-            "lr",
+            dict(
+                patch_size=self.patch_size,
+                hidden_size=self.hidden_size,
+                decov_chns=self.deconv_chns,
+                lr=lr,
+                out_channels=out_channels,
+            )
+        )
+        self.up_kernel_size = [int(math.sqrt(i)) for i in self.patch_size]
+        self.Decoder = CustomDecoder(
+            hidden_size=self.hidden_size,
+            decov_chns=self.deconv_chns,
+            up_kernel_size=self.up_kernel_size,
+            out_channels=out_channels,
         )
 
-        self.model = ViTAutoEnc(
-            in_channels=in_channels,
-            img_size=img_size,
-            patch_size=patch_size,
-            proj_type=proj_type,
-            hidden_size=hidden_size,
-            mlp_dim=mlp_dim,
-            deconv_chns=decov_chns,
-            num_layers=num_layers,
-            num_heads=num_heads,
-            out_channels=out_channels,  ## Adjust as needed
+        self.model = SplitAutoEncoder(
+            encoder=self.encoder,
+            decoder=self.Decoder,
+            hidden_size=self.hidden_size,
+            patch_size=self.patch_size,
         )
 
-        self.recon_loss = nn.L1Loss()
-        self.contrastive_loss = ContrastiveLoss(temperature=0.05)
         self.lr = lr
 
         base_data_path = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
@@ -154,19 +159,25 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         # TODO Check this loss function 1 channel output for now
         self.dice_loss_function = DiceCELoss(
             include_background=False,
-            to_onehot_y=True,
             softmax=True,
+            to_onehot_y=True,
             squared_pred=True,
             jaccard=False,
             reduction="mean",
         )
         self.tv_loss = TverskyLoss(
             softmax=True,
+            to_onehot_y=True,
             alpha=0.3,  # weight of false positive
             beta=0.7,  # weight of false negative
         )
-        self.dice_metric = DiceMetric()
-        self.hausdorff_metric = HausdorffDistanceMetric()
+        self.dice_metric = DiceMetric(
+            include_background=False,
+            reduction="mean_channel",
+        )
+        self.hausdorff_metric = HausdorffDistanceMetric(
+            include_background=False, reduction="mean_channel", percentile=95
+        )
 
     def _get_train_transforms(self):
         RandFlipd_prob = 0.5
@@ -219,19 +230,32 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
-        outputs_v1 = torch.sigmoid(outputs_v1)
         # TODO RUN PCA ON HIDDEN STATES ect
+        print(f"label: {label.shape}")
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
-        hausdorff_metric = self.hausdorff_metric(outputs_v1, label)
-        dice_metric = self.dice_metric(outputs_v1, label)
 
-        loss = diceCE_loss + 0.5 * tv_loss
-        self.log("train_combined_loss", loss)
-        self.log("train_dice_loss", diceCE_loss)
-        self.log("train_tv_loss", tv_loss)
-        self.log("train_hausdorff_distance", hausdorff_metric)
-        self.log("train_dice_metric", dice_metric)
+        # TODO Implement Post processing of removing small objects here
+        single_channel_preds = convert_AutoEncoder_output_to_labelpred(outputs_v1)
+        self.hausdorff_metric(single_channel_preds, label)
+        self.dice_metric(single_channel_preds, label)
+
+        loss = diceCE_loss + 0.25 * tv_loss
+        self.log("train_combined_loss", loss, batch_size=self.batch_size)
+        self.log("train_dice_loss", diceCE_loss, batch_size=self.batch_size)
+        self.log("train_tv_loss", tv_loss, batch_size=self.batch_size)
+        self.log(
+            "train_hausdorff_distance",
+            self.hausdorff_metric.aggregate().mean(),
+            batch_size=self.batch_size,
+            on_epoch=True,
+        )
+        self.log(
+            "train_dice_metric",
+            self.dice_metric.aggregate().mean(),
+            batch_size=self.batch_size,
+            on_epoch=True,
+        )
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -240,19 +264,38 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
-        outputs_v1 = torch.softmax(outputs_v1, dim=1)
         # TODO RUN PCA ON HIDDEN STATES ect
+        # print(f"Outputs values: {np.unique(outputs_v1.cpu().numpy())}")
+
+        # print(f"Output shape: {outputs_v1.shape}")
+        # print(f"label: {label.shape}")
+        #
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
-        hausdorff_metric = self.hausdorff_metric(outputs_v1, label)
-        dice_metric = self.dice_metric(outputs_v1, label)
 
-        loss = diceCE_loss + 0.5 * tv_loss
+        # TODO Implement Post processing of removing small objects here
+        single_channel_preds = convert_AutoEncoder_output_to_labelpred(outputs_v1)
+
+        self.hausdorff_metric(single_channel_preds, label)
+        self.dice_metric(single_channel_preds, label)
+
+        loss = diceCE_loss + 0.25 * tv_loss
         self.log("val_combined_loss", loss)
         self.log("val_dice_loss", diceCE_loss)
         self.log("val_tv_loss", tv_loss)
-        self.log("val_hausdorff_distance", hausdorff_metric.mean())
-        self.log("val_dice_metric", dice_metric.mean())
+        # TODO Track each metric for each class
+        self.log(
+            "val_hausdorff_distance",
+            self.hausdorff_metric.aggregate().mean(),
+            on_epoch=True,
+            batch_size=self.batch_size,
+        )
+        self.log(
+            "val_dice_metric",
+            self.dice_metric.aggregate().mean(),
+            on_epoch=True,
+            batch_size=self.batch_size,
+        )
 
         return loss
 
@@ -268,7 +311,6 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             next(iter(val_loader))["image"],
             next(iter(val_loader))["label"],
         )
-
         # Move images and labels to device
         images = images.to(self.device)
         labels = labels.to(self.device)
@@ -278,29 +320,24 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         # Run the inference
         # TODO RUN PCA ON HIDDEN STATES ect
         outputs, hidden_states = self.forward(images)
-
-        # TODO @JOSLIN can you figure out why we are getting
-        #  Outputs values: [-910.33405 -904.64087 -879.9035  ...  351.73096  354.75842  491.39194]
-        #  EXPECTED: [0, 1, 2, 3, 4]
-        print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
+        single_channel_preds = convert_AutoEncoder_output_to_labelpred(outputs)
+        print(f"Outputs values: {np.unique(single_channel_preds.cpu().numpy())}")
         print(f"Output shape: {outputs.shape}")
-        print(f"Labels shape: {labels.shape}")
+        print(f"one_hot_label shape: {single_channel_preds.shape}")
         print(f"Images shape: {images.shape}")
 
         monai.visualize.plot_2d_or_3d_image(
             data=labels,
-            tag=f"Labels",
+            tag=f"label",
             step=self.current_epoch,
             writer=self.logger.experiment,
-            # max_channels=self.number_of_classes,
             frame_dim=-1,
         )
         monai.visualize.plot_2d_or_3d_image(
-            data=outputs,
+            data=single_channel_preds,
             tag=f"Predictions",
             step=self.current_epoch,
             writer=self.logger.experiment,
-            # max_channels=self.number_of_classes,
             frame_dim=-1,
         )
 
@@ -312,14 +349,8 @@ def train_model(
     batch_size: int,
     epochs: int,
     experiment_name: str,
-    in_channels: int,
-    hidden_size: int,
-    mlp_dim: int,
-    proj_type: str,
-    num_layers: int,
     decov_chns: int,
-    num_heads: int,
-    patch_size: list,
+    encoder_path: str,
     testing: bool = False,
 ):
     # Environment configuration for CUDA
@@ -341,35 +372,22 @@ def train_model(
 
     log_every_n_steps = int((98 * 0.8) // batch_size)
     net = VitSupervisedAutoEncoder(
-        img_size=(320, 320, 32),
-        patch_size=patch_size,
-        in_channels=in_channels,
-        hidden_size=hidden_size,  # Ensure this matches the hidden_size used when the checkpoint was saved
-        mlp_dim=mlp_dim,
-        proj_type=proj_type,
-        num_layers=num_layers,  # Ensure this matches the num_layers used when the checkpoint was saved
+        encoder_path=encoder_path,
         decov_chns=decov_chns,  # Ensure this matches the decov_chns used when the checkpoint was saved
-        num_heads=num_heads,  # Ensure this matches the num_heads used when the checkpoint was saved
         lr=learning_rate,
         testing=testing,
     )
-
-    # Then load the state_dict from the checkpoint
-
-    checkpoint = torch.load(
-        "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/AML_Project_Supervised/Unsupervised/UnsupervisedVITAutoEncoderLogs/UnsupervisedVITAutoEncoderLogs-checkpoint-epoch=05-val_loss=0.84.ckpt",
-        map_location="gpu" if torch.cuda.is_available() else "cpu",
-    )
-    net.load_state_dict(checkpoint["state_dict"], strict=False, assign=True)
 
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "SupervisedEncoderLogs"
     log_dir.mkdir(exist_ok=True, parents=True)
     tb_logger = TensorBoardLogger(save_dir=log_dir.as_posix(), name=experiment_name)
 
-    loss_checkpoint_fn = experiment_name + "-checkpoint-{epoch:02d}-{val_loss:.2f}"
+    loss_checkpoint_fn = (
+        experiment_name + "-checkpoint-{epoch:02d}--loss-{val_combined_loss:.2f}"
+    )
     dice_checkpoint_fn = (
-        experiment_name + "-checkpoint-{epoch:02d}-{val_dice_metric:.2f}"
+        experiment_name + "-checkpoint-{epoch:02d}-dice--{val_dice_metric:.2f}"
     )
     top_k = 3
     checkpoint_callback = ModelCheckpoint(
@@ -396,7 +414,7 @@ def train_model(
         enable_checkpointing=True,
         num_sanity_val_steps=1,
         log_every_n_steps=log_every_n_steps,
-        callbacks=[checkpoint_callback],
+        callbacks=[checkpoint_callback, best_model_checkpoint],
     )
 
     # Start training
@@ -405,41 +423,9 @@ def train_model(
 
 def do_main():
     parser = argparse.ArgumentParser(
-        description="Train the AutoEncoder with Vision Transformer."
-    )
-    parser.add_argument(
-        "--patch_size",
-        type=int,
-        nargs="+",
-        default=[16, 16, 16],
-        help="Dimensions of each image patch.",
-    )
-    parser.add_argument(
-        "--hidden_size",
-        type=int,
-        default=768,
-        help="Hidden size for the transformer model.",
-    )
-    parser.add_argument(
-        "--mlp_dim",
-        type=int,
-        default=3072,
-        help="MLP dimension for the transformer model.",
-    )
-    parser.add_argument(
-        "--proj_type",
-        type=str,
-        default="conv",
-        help="Projection type for the transformer model.",
-    )
-    parser.add_argument(
-        "--num_layers",
-        type=int,
-        default=12,
-        help="Number of layers in the transformer model.",
+        description="Train a supervised encoder model using a pretrained unsupervised encoder."
     )
     #### NOTE DECONV(DECODER) ARE WHAT MAKES THIS SUPERVISED ####
-
     parser.add_argument(
         "--decov_chns",
         type=int,
@@ -447,26 +433,20 @@ def do_main():
         help="Number of channels for the deconvolution layer.",
     )
     parser.add_argument(
-        "--num_heads",
-        type=int,
-        default=12,
-        help="Number of heads for the transformer model.",
-    )
-    parser.add_argument(
         "--experiment_name",
         type=str,
         default="UnsupervisedEncoder",
         help="Name of the experiment to be logged.",
     )
+    parser.add_argument(
+        "--encoder_path",
+        type=str,
+        required=True,
+        help="Path to the pretrained unsupervised encoder model.",
+    )
 
     parser.add_argument(
         "--batch_size", type=int, default=4, help="Batch size for training."
-    )
-    parser.add_argument(
-        "--in_channels",
-        type=int,
-        default=1,
-        help="Number of input channels in the image.",
     )
     parser.add_argument(
         "--learning_rate",
@@ -490,15 +470,9 @@ def do_main():
         batch_size=args.batch_size,
         epochs=args.max_epochs,
         experiment_name=args.experiment_name,
-        in_channels=args.in_channels,
-        hidden_size=args.hidden_size,
-        mlp_dim=args.mlp_dim,
-        proj_type=args.proj_type,
-        num_layers=args.num_layers,
         decov_chns=args.decov_chns,
-        num_heads=args.num_heads,
-        patch_size=args.patch_size,
         testing=args.testing,
+        encoder_path=args.encoder_path,
     )
 
 
