@@ -1,6 +1,9 @@
+from typing import Sequence
+
 import torch
 from monai.networks.blocks import UnetrPrUpBlock
 from monai.networks.layers import Norm, Act
+from monai.networks.nets import UNETR
 from monai.networks.nets.flexible_unet import UNetDecoder
 from torch import nn as nn
 
@@ -14,7 +17,13 @@ from monai.networks.blocks.segresnet_block import (
 
 class SplitAutoEncoder(nn.Module):
     def __init__(
-        self, encoder, decoder, hidden_size, patch_size, pass_hidden_to_decoder=False
+        self,
+        encoder,
+        decoder,
+        hidden_size,
+        patch_size,
+        freeze_encoder,
+        pass_hidden_to_decoder=False,
     ):
         super().__init__()
         self.encoder = encoder
@@ -174,3 +183,49 @@ class CustomDecoder3D(nn.Module):
     import torch
     import torch.nn as nn
     from torch.nn.functional import interpolate
+
+
+class ModifiedUnetR(UNETR):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        checkpoint_path: str,
+        img_size: Sequence[int] | int,
+        feature_size: int = 16,
+        hidden_size: int = 768,
+        mlp_dim: int = 3072,
+        num_heads: int = 12,
+        pos_embed: str = "conv",
+        proj_type: str = "conv",
+        norm_name: tuple | str = "instance",
+        conv_block: bool = True,
+        res_block: bool = True,
+        dropout_rate: float = 0.0,
+        spatial_dims: int = 3,
+        qkv_bias: bool = False,
+        save_attn: bool = False,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            img_size=img_size,
+            feature_size=feature_size,
+            hidden_size=hidden_size,
+            mlp_dim=mlp_dim,
+            num_heads=num_heads,
+            pos_embed=pos_embed,
+            proj_type=proj_type,
+            norm_name=norm_name,
+            conv_block=conv_block,
+            res_block=res_block,
+            dropout_rate=dropout_rate,
+            spatial_dims=spatial_dims,
+            qkv_bias=qkv_bias,
+            save_attn=save_attn,
+        )
+
+        checkpoint = torch.load(
+            checkpoint_path, map_location=lambda storage, loc: storage
+        )
+        self.vit.load_state_dict(checkpoint["encoder"], strict=False, assign=True)
