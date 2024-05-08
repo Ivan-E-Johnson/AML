@@ -163,3 +163,4 @@ websocket-client==1.7.0
 Werkzeug==3.0.2
 yarl==1.9.4
 scikit-image==0.23.2
+transformers

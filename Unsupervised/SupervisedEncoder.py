@@ -1,9 +1,12 @@
 import argparse
 import math
 import os
+from PIL import Image
+import io
 from pathlib import Path
 from CustomModels import CustomDecoder, SplitAutoEncoder
-
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
 import monai
 import numpy as np
 import pytorch_lightning as pl
@@ -11,6 +14,7 @@ from monai.data import DataLoader, CacheDataset
 from monai.metrics import DiceMetric, HausdorffDistanceMetric, SurfaceDistanceMetric
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
+from sklearn.manifold import TSNE
 from mae_vit_model import MAEViTAutoEnc
 from monai.networks.nets import ViTAutoEnc, ViT
 import torch.nn as nn
@@ -48,7 +52,6 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from support_functions import (
     convert_logits_to_one_hot,
     convert_AutoEncoder_output_to_labelpred,
-    view_middle_slice,
 )
 
 load_dotenv()
@@ -166,10 +169,11 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             reduction="mean",
         )
         self.tv_loss = TverskyLoss(
+            include_background=False,
             softmax=True,
             to_onehot_y=True,
-            alpha=0.3,  # weight of false positive
-            beta=0.7,  # weight of false negative
+            alpha=0.5,  # weight of false positive
+            beta=0.5,  # weight of false negative
         )
         self.dice_metric = DiceMetric(
             include_background=False,
@@ -184,8 +188,9 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         return Compose(
             [
                 # ModalityStackTransformd(keys=["image"]),
-                LoadImageD(keys=["image", "label"], image_only=False),
+                LoadImageD(keys=["image", "label"], image_only=False, dtype=np.float32),
                 # DataStatsD(keys=["image"]),
+                ToTensord(keys=["image", "label"], dtype=torch.float32),
                 EnsureChannelFirstd(keys=["image", "label"]),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=0),
                 RandFlipd(keys=["image", "label"], prob=RandFlipd_prob, spatial_axis=1),
@@ -199,7 +204,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
                 ),
                 RandGaussianNoiseD(keys=["image", "label"], prob=RandFlipd_prob / 2),
                 RandHistogramShiftD(keys=["image", "label"], prob=RandFlipd_prob / 2),
-                ToTensord(keys=["image", "label"]),
+                ToTensord(keys=["image", "label"], dtype=torch.float32),
                 # SaveImageD(keys=["contrastive_patched"], folder_layout=layout),
             ]
         )
@@ -207,9 +212,9 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
     def _get_val_transforms(self):
         return Compose(
             [
-                LoadImageD(keys=["image", "label"], image_only=False),
+                LoadImageD(keys=["image", "label"], image_only=False, dtype=np.float32),
                 EnsureChannelFirstd(keys=["image", "label"]),
-                ToTensord(keys=["image", "label"]),
+                ToTensord(keys=["image", "label"], dtype=torch.float32),
             ]
         )
 
@@ -231,7 +236,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         )
         outputs_v1, _hidden_states = self.forward(inputs)
         # TODO RUN PCA ON HIDDEN STATES ect
-        print(f"label: {label.shape}")
+        # print(f"label: {label.shape}")
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
 
@@ -320,6 +325,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         # Run the inference
         # TODO RUN PCA ON HIDDEN STATES ect
         outputs, hidden_states = self.forward(images)
+
         single_channel_preds = convert_AutoEncoder_output_to_labelpred(outputs)
         print(f"Outputs values: {np.unique(single_channel_preds.cpu().numpy())}")
         print(f"Output shape: {outputs.shape}")
@@ -339,6 +345,38 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             step=self.current_epoch,
             writer=self.logger.experiment,
             frame_dim=-1,
+        )
+        # Select a layer's hidden states; assuming using layer index 0 for visualization
+        selected_hidden_states = hidden_states[0].cpu().numpy()
+
+        # Perform PCA
+        pca = PCA(n_components=2)
+        pca_results = pca.fit_transform(
+            selected_hidden_states.reshape(-1, selected_hidden_states.shape[-1])
+        )
+
+        # Perform t-SNE
+        tsne = TSNE(n_components=2, random_state=42)
+        tsne_results = tsne.fit_transform(
+            selected_hidden_states.reshape(-1, selected_hidden_states.shape[-1])
+        )
+
+        # Plot PCA and t-SNE results and log to TensorBoard
+        fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+
+        axs[0].scatter(pca_results[:, 0], pca_results[:, 1], alpha=0.6)
+        axs[0].set_title("PCA Projection of Hidden States")
+        axs[0].set_xlabel("Principal Component 1")
+        axs[0].set_ylabel("Principal Component 2")
+
+        axs[1].scatter(tsne_results[:, 0], tsne_results[:, 1], alpha=0.6)
+        axs[1].set_title("t-SNE Projection of Hidden States")
+        axs[1].set_xlabel("t-SNE Dimension 1")
+        axs[1].set_ylabel("t-SNE Dimension 2")
+
+        plt.tight_layout()
+        self.logger.experiment.add_figure(
+            "PCA and t-SNE Projections", fig, global_step=self.current_epoch
         )
 
         torch.enable_grad()
