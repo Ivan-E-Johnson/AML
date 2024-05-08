@@ -388,14 +388,11 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         tsne = TSNE(n_components=2, random_state=42)
         tsne_results = tsne.fit_transform(reshaped_states)
 
-        # Convert labels to CPU and numpy for visualization
-        np_labels = labels.cpu().numpy().flatten()
-
         # Plot PCA and t-SNE results and log to TensorBoard
         fig, axs = plt.subplots(1, 2, figsize=(12, 6))
 
         scatter = axs[0].scatter(
-            pca_results[:, 0], pca_results[:, 1], c=np_labels, alpha=0.6, cmap="viridis"
+            pca_results[:, 0], pca_results[:, 1], alpha=0.6, cmap="viridis"
         )
         axs[0].set_title("PCA Projection of Hidden States")
         axs[0].set_xlabel("Principal Component 1")
@@ -405,7 +402,6 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         scatter = axs[1].scatter(
             tsne_results[:, 0],
             tsne_results[:, 1],
-            c=np_labels,
             alpha=0.6,
             cmap="viridis",
         )
