@@ -40,7 +40,7 @@ def _create_dict_of_preprocessed_unlabeled_data(
     base_data_path: Path, is_testing: bool = False
 ) -> list:
     data_dicts = []
-
+    #  create a list of dictionaries with the image paths
     for dir in base_data_path.iterdir():
         if dir.is_dir():
             images_list = []
@@ -55,6 +55,7 @@ def _create_dict_of_preprocessed_unlabeled_data(
 
 
 def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
+    # create a list of dictionaries with the image paths
     data_dicts = []
     for dir in base_data_path.iterdir():
         if dir.is_dir():
@@ -77,6 +78,7 @@ image_size = (240, 240, 16)
 patch_size = (16, 16, 16)
 # num_samples = 240 // 60 * 240 // 60 * 16 // 4
 num_samples = 4**3
+#  define the training transforms
 train_transforms = Compose(
     [
         # ModalityStackTransformd(keys=["image"]),
@@ -124,11 +126,12 @@ train_transforms = Compose(
 if __name__ == "__main__":
     base_data_path = Path("/ALL_PROSTATEx/WITHOUT_SEGMENTATION/PreProcessed")
     print(f"Base data path: {base_data_path}")
+    # get the data dictionaries
     data_dicts = _create_image_dict(base_data_path, is_testing=True)
     train_image_paths, test_image_paths = train_test_split(data_dicts, test_size=0.2)
 
     print(f"Data dicts: {data_dicts}")
-
+    # create the cache dataset
     cache_dataset = CacheDataset(
         data=train_image_paths,
         transform=train_transforms,
@@ -146,7 +149,7 @@ if __name__ == "__main__":
     Path(logdir).mkdir(parents=True, exist_ok=True)
     print("item size:", images)
     print("CacheDataset: ", CacheDataset)
-
+    # Define the model
     model = ViTAutoEnc(
         in_channels=1,
         img_size=image_size,
@@ -158,7 +161,6 @@ if __name__ == "__main__":
     device = torch.device("cpu")
 
     model = model.to(device)
-
     # Define Hyper-paramters for training loop
     max_epochs = 500
     val_interval = 2
@@ -174,7 +176,7 @@ if __name__ == "__main__":
     recon_loss = L1Loss()
     contrastive_loss = ContrastiveLoss(temperature=0.05)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
+    # Training Loop
     for epoch in range(max_epochs):
         print("-" * 10)
         print(f"epoch {epoch + 1}/{max_epochs}")
@@ -194,14 +196,18 @@ if __name__ == "__main__":
                 batch_data["reference_patched"].to(device),
             )
             print(f"I1: {inputs.shape}, I2: {inputs_2.shape}, GT: {gt_input.shape}")
+            # Zero the gradients
             optimizer.zero_grad()
+            # Forward Pass
             outputs_v1, hidden_v1 = model(inputs)
             outputs_v2, hidden_v2 = model(inputs_2)
             print(f"outputs_v1: {outputs_v1.shape}, outputs_v2: {outputs_v2.shape}")
+            # Flatten the outputs
             flat_out_v1 = outputs_v1.flatten(start_dim=1, end_dim=4)
             flat_out_v2 = outputs_v2.flatten(start_dim=1, end_dim=4)
             print(f"flat_out_v1: {flat_out_v1.shape}, flat_out_v2: {flat_out_v2.shape}")
             print(f"GT: {gt_input.shape}")
+            # Calculate the Loss
             r_loss = recon_loss(outputs_v1, gt_input)
             cl_loss = contrastive_loss(flat_out_v1, flat_out_v2)
 
@@ -227,12 +233,12 @@ if __name__ == "__main__":
         epoch_loss /= step
         epoch_cl_loss /= step
         epoch_recon_loss /= step
-
+        # Store the loss values
         epoch_loss_values.append(epoch_loss)
         epoch_cl_loss_values.append(epoch_cl_loss)
         epoch_recon_loss_values.append(epoch_recon_loss)
         print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
-
+        # Validation Loop
         if epoch % val_interval == 0:
             print("Entering Validation for epoch: {}".format(epoch + 1))
             total_val_loss = 0
@@ -260,7 +266,7 @@ if __name__ == "__main__":
                 f"epoch {epoch + 1} Validation avg loss: {total_val_loss:.4f}, "
                 f"time taken: {end_time - start_time}s"
             )
-
+            # Save the model if the validation loss is less than the best validation loss
             if total_val_loss < best_val_loss:
                 print(f"Saving new model based on validation loss {total_val_loss:.4f}")
                 best_val_loss = total_val_loss

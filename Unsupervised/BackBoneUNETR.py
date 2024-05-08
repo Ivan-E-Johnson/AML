@@ -63,13 +63,14 @@ def _create_image_dict(
 ) -> tuple[list, list]:
     image_data_dicts = []
     label_data_dicts = []
-
+    # Get all the directories in the base data path
     for dir in base_data_path.iterdir():
         if dir.is_dir():
             image_data_dicts.append({"image": dir / f"{dir.name}_pp_t2w.nii.gz"})
             label_data_dicts.append(
                 {"label": dir / f"{dir.name}_pp_segmentation.nii.gz"}
             )
+    # Only use a subset of the data for testing
     if is_testing:
         image_data_dicts = image_data_dicts[:10]
         label_data_dicts = label_data_dicts[:10]
@@ -86,6 +87,7 @@ class BackBoneUNETR(pl.LightningModule):
         lr=1e-4,
         out_channels=5,
     ):
+        # Call the super constructor
         super().__init__()
         self.testing = testing
         self.batch_size = 4
@@ -114,8 +116,6 @@ class BackBoneUNETR(pl.LightningModule):
             feature_size=16,
         )
         print(f"Model: {self.model}")
-        # make_dot(self.model, params=dict(self.model.named_parameters())).render( "SupervisedBackbonedAutoEncoder", format="png")
-
         self.lr = lr
 
         base_data_path = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
@@ -126,7 +126,7 @@ class BackBoneUNETR(pl.LightningModule):
             dict(**image, **label)
             for image, label in zip(image_data_dict, label_data_dict)
         ]
-
+        # Split the data into training and testing
         train_image_paths, test_image_paths = train_test_split(
             data_dicts, test_size=0.2, random_state=42
         )
@@ -170,6 +170,7 @@ class BackBoneUNETR(pl.LightningModule):
         )
 
     def _get_train_transforms(self):
+        # Define the transformations for the training data
         RandFlipd_prob = 0.5
         return Compose(
             [
@@ -196,6 +197,7 @@ class BackBoneUNETR(pl.LightningModule):
         )
 
     def _get_val_transforms(self):
+        # Define the transformations for the validation data
         return Compose(
             [
                 LoadImageD(keys=["image", "label"], image_only=False, dtype=np.float32),
@@ -205,10 +207,12 @@ class BackBoneUNETR(pl.LightningModule):
         )
 
     def train_dataloader(self):
+        # get the training data
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
 
     def val_dataloader(self):
+        # get the validation data
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
 
@@ -216,13 +220,13 @@ class BackBoneUNETR(pl.LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
+        # Get the inputs and labels
         inputs, label = (
             batch["image"],
             batch["label"],
         )
         outputs_v1 = self.forward(inputs)
         # TODO RUN PCA ON HIDDEN STATES ect
-        # print(f"label: {label.shape}")
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
 
@@ -232,6 +236,7 @@ class BackBoneUNETR(pl.LightningModule):
         self.dice_metric(single_channel_preds, label)
 
         loss = diceCE_loss + 0.25 * tv_loss
+        # Log the metrics to tensorboard
         self.log("train_combined_loss", loss, batch_size=self.batch_size)
         self.log("train_dice_loss", diceCE_loss, batch_size=self.batch_size)
         self.log("train_tv_loss", tv_loss, batch_size=self.batch_size)
@@ -250,17 +255,13 @@ class BackBoneUNETR(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # Get the inputs and labels
         inputs, label = (
             batch["image"],
             batch["label"],
         )
         outputs_v1 = self.forward(inputs)
         # TODO RUN PCA ON HIDDEN STATES ect
-        # print(f"Outputs values: {np.unique(outputs_v1.cpu().numpy())}")
-
-        # print(f"Output shape: {outputs_v1.shape}")
-        # print(f"label: {label.shape}")
-        #
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
 
@@ -271,6 +272,7 @@ class BackBoneUNETR(pl.LightningModule):
         self.dice_metric(single_channel_preds, label)
 
         loss = diceCE_loss + 0.25 * tv_loss
+        # Log the metrics to tensorboard
         self.log("val_combined_loss", loss)
         self.log("val_dice_loss", diceCE_loss)
         self.log("val_tv_loss", tv_loss)
@@ -291,10 +293,12 @@ class BackBoneUNETR(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+        # Define the optimizer
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
     def on_validation_epoch_end(self):
+        # Disable gradient computation
         torch.no_grad()
         # Get the first batch of the validation data
         val_loader = self.val_dataloader()
@@ -311,13 +315,13 @@ class BackBoneUNETR(pl.LightningModule):
         # Run the inference
         # TODO RUN PCA ON HIDDEN STATES ect
         outputs = self.forward(images)
-
+        #
         single_channel_preds = convert_AutoEncoder_output_to_labelpred(outputs)
         print(f"Outputs values: {np.unique(single_channel_preds.cpu().numpy())}")
         print(f"Output shape: {outputs.shape}")
         print(f"one_hot_label shape: {single_channel_preds.shape}")
         print(f"Images shape: {images.shape}")
-
+        # Log the images to tensorboard
         monai.visualize.plot_2d_or_3d_image(
             data=labels,
             tag=f"label",
@@ -369,7 +373,7 @@ def train_model(
         lr=learning_rate,
         testing=testing,
     )
-
+    # Create a directory to store the logs
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "UNETR-Logs" / experiment_name
     log_dir.mkdir(exist_ok=True, parents=True)
@@ -382,6 +386,7 @@ def train_model(
         experiment_name + "-checkpoint-{epoch:02d}-dice--{val_dice_metric:.2f}"
     )
     top_k = 3
+    # Configure the model checkpoint callbacks
     checkpoint_callback = ModelCheckpoint(
         monitor="val_combined_loss",
         mode="min",
@@ -414,6 +419,7 @@ def train_model(
 
 
 def do_main():
+    # Parse the command line arguments
     parser = argparse.ArgumentParser(
         description="Train a supervised encoder model using a pretrained unsupervised encoder."
     )

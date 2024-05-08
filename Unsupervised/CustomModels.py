@@ -16,6 +16,9 @@ from monai.networks.blocks.segresnet_block import (
 
 
 class SplitAutoEncoder(nn.Module):
+    """
+    A simple autoencoder that splits the encoder and decoder into separate modules.
+    """
     def __init__(
         self,
         encoder,
@@ -33,12 +36,21 @@ class SplitAutoEncoder(nn.Module):
         self.pass_hidden_to_decoder = pass_hidden_to_decoder
 
     def forward(self, x):
+        """
+        Forward pass of the autoencoder.
+        Parameters
+        ----------
+        x
+
+        Returns
+        -------
+
+        """
         spatial_size = x.shape[2:]
         x, down_x = self.encoder(x)
-
-        # print(f"Down X Shape: {down_x}")
         x = self.norm(x)
         x = x.transpose(1, 2)
+        # Reshape the output to match the spatial size of the input
         d = [s // p for s, p in zip(spatial_size, self.patch_size)]
         x = torch.reshape(x, [x.shape[0], x.shape[1], *d])
         if self.pass_hidden_to_decoder:
@@ -49,6 +61,9 @@ class SplitAutoEncoder(nn.Module):
 
 
 class CustomDecoder(nn.Module):
+    """
+    A custom decoder module for a U-Net architecture.
+    """
     def __init__(
         self,
         hidden_size,
@@ -80,6 +95,16 @@ class CustomDecoder(nn.Module):
         self.classification = classsification
 
     def forward(self, x):
+        """
+        Forward pass of the decoder.
+        Parameters
+        ----------
+        x
+
+        Returns
+        -------
+        X
+        """
         x = self.conv3d_transpose(x)
         if self.classification:
             x = self.activation(x)
@@ -94,6 +119,9 @@ class CustomDecoder(nn.Module):
 
 
 class CustomDecoder3D(nn.Module):
+    """
+    A custom decoder module for a 3D U-Net architecture.
+    """
     def __init__(
         self,
         hidden_size,
@@ -158,6 +186,17 @@ class CustomDecoder3D(nn.Module):
         self.final_conv = nn.Conv3d(current_channels, final_channels, kernel_size=1)
 
     def forward(self, x, down_x):
+        """
+        Forward pass of the decoder.
+        Parameters
+        ----------
+        x
+        down_x
+
+        Returns
+        -------
+        x
+        """
         # Process input through the initial upsample
         print(f"Original X Shape: {x.shape}")
         print(f"Original Down X Shape: {down_x[0].shape}")
@@ -186,6 +225,9 @@ class CustomDecoder3D(nn.Module):
 
 
 class ModifiedUnetR(UNETR):
+    """
+    A modified version of the UNETR model that allows loading a pre-trained model.
+    """
     def __init__(
         self,
         in_channels: int,

@@ -18,34 +18,23 @@ from monai.metrics import (
     DiceMetric,
     HausdorffDistanceMetric,
 )
-from monai.networks.layers import Norm
 from monai.networks.nets import UNet, SegResNet
 from monai.transforms import (
     Compose,
     EnsureChannelFirstD,
     RandFlipd,
-    AsDiscreted,
-    DataStatsD,
-    AsDiscrete,
-    KeepLargestConnectedComponent,
-    FillHoles,
-    Spacingd,
-    ResizeWithPadOrCropd,
 )
 from monai.transforms import (
     LoadImaged,
     ToTensord,
-    ToTensor,
 )
 from monai.transforms import (
     RandGaussianNoiseD,
     RandHistogramShiftD,
     RandRotated,
 )
-from monai.utils import UpsampleMode
-from monai.visualize import img2tensorboard
+
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.profilers import SimpleProfiler
 from sklearn.model_selection import train_test_split
 
 from support_functions import (
@@ -58,9 +47,6 @@ from support_functions import (
 )
 
 from pathlib import Path
-
-# weights obtained from running weight_labels() in itk_preprocessing.py
-
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -71,6 +57,7 @@ RUN_NAME = "CoarseProstate"
 
 # TODO REVERT BACK TO USING THE RAW DATA WITH BASIC NORMALIZATION
 def init_single_channel_raw_data():
+    # Load the raw data
     raw_dir = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
     subject_dirs = [
         subject_dir
@@ -79,6 +66,7 @@ def init_single_channel_raw_data():
     ]
     image_paths = []
     mask_paths = []
+    # Get the image and mask paths
     for subject_dir in subject_dirs:
         mask_paths.append(subject_dir / f"{subject_dir.name}_pp_segmentation.nii.gz")
         image_paths.append(subject_dir / f"{subject_dir.name}_pp_t2w.nii.gz")
@@ -120,7 +108,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         self.batch_size = batch_size
         self.learning_rate = learning_rate
         self.multi_gpu = using_multi_gpu
-
+        # initialize the model
         self._model = SegResNet(
             spatial_dims=3,
             init_filters=init_filters,
@@ -132,7 +120,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             # upsample_mode=UpsampleMode.DECONV,
         )
         # TODO Add the weights to the loss function and allow multichannel output
-
+        # set the loss function
         self.dice_loss_function = DiceFocalLoss(
             lambda_focal=0.5,
             sigmoid=True,
@@ -145,7 +133,6 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         self.hausdorff_metric = HausdorffDistanceMetric(
             reduction="mean",
         )
-        # self.rand_score = torchmetrics.clustering.RandScore()
 
         self.threshold_prob = (
             0.5  # Threshold for converting voxel_probability to binary
@@ -154,15 +141,6 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         self.best_val_epoch = 0
         self.prepare_data()
         self.save_hyperparameters()
-
-        # self.PostPred = Compose(
-        #     [
-        #         AsDiscrete(),
-        #         KeepLargestConnectedComponent(),
-        #         FillHoles(),
-        #         ToTensor(),
-        #     ]
-        # )
 
     def forward(self, x):
         """
@@ -316,17 +294,14 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         torch.enable_grad()
         images, labels = batch["image"], batch["label"]
         outputs = self.forward(images)
-        # with torch.set_grad_enabled(True):
-        #     outputs = self.PostPred(outputs)
 
+        # if the model is in testing mode, print the shapes of the images, labels and outputs
         if self.is_testing:
             print("Training Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
             print(f"outputs shape {outputs.shape}")
         loss = self.dice_loss_function(outputs, labels)
-        # onehot_predictions = convert_logits_to_one_hot(outputs)
-        # dice = self.dice_metric(y_pred=onehot_predictions, y=labels).mean()
         outputs = self.convert_logits_to_binary(outputs)
         dice = self.dice_metric(y_pred=outputs, y=labels).mean()
         # Log metrics
@@ -348,15 +323,6 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             sync_dist=self.multi_gpu,
             batch_size=self.batch_size,
         )
-        # self.log(
-        #     "train_rand_score",
-        #     self.rand_score(preds=outputs, target=labels).mean(),
-        #     on_step=False,
-        #     on_epoch=True,
-        #     reduce_fx=torch.mean,
-        #     sync_dist=self.multi_gpu,
-        #     batch_size=self.batch_size,
-        # )
 
         return loss
 
@@ -364,28 +330,25 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
         torch.no_grad()
         images, labels = batch["image"], batch["label"]
         outputs = self.forward(images)
-        # with torch.set_grad_enabled(True):
-        #     outputs = self.PostPred(outputs)
 
         if self.is_testing:
             print("Validation Step")
             print(f"Images.Shape = {images.shape}")
             print(f"Labels.Shape = {labels.shape}")
             print(f"Shape after post_pred: {outputs.shape}")
-
+        # Calculate the loss
         loss = self.dice_loss_function(outputs, labels)
-
+        # Convert the logits to binary
         outputs = self.convert_logits_to_binary(outputs)
         dice = self.dice_metric(y_pred=outputs, y=labels).mean()
         haussdorf = self.hausdorff_metric(y_pred=outputs, y=labels).mean()
-        # rand_score = self.rand_score(preds=outputs, target=labels).mean()
 
         if self.is_testing:
             print(f"Predictions shape: {outputs.shape}")
             print(f"Dice: {dice}")
             print(f"Haussdorf: {haussdorf}")
             # print(f"Rand Score: {rand_score}")
-
+        # Log metrics
         self.log(
             name="haussdorf_distance",
             value=haussdorf,
@@ -395,15 +358,6 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
             sync_dist=self.multi_gpu,
         )
 
-        # self.log(
-        #     name="rand_score",
-        #     value=rand_score,
-        #     on_step=False,
-        #     on_epoch=True,
-        #     batch_size=self.batch_size,
-        #     sync_dist=self.multi_gpu,
-        # )
-        # Log metrics
         self.log(
             "val_dice",
             dice,
@@ -448,11 +402,7 @@ class CoarseSegNet(pytorch_lightning.LightningModule):
 
         outputs = probs > self.threshold_prob
 
-        # print(f"Outputs values: {np.unique(outputs.cpu().numpy())}")
-        # print(f"Output shape: {outputs.shape}")
-        # print(f"Labels shape: {labels.shape}")
-        # print(f"Images shape: {images.shape}")
-
+        #  visualize the images
         monai.visualize.plot_2d_or_3d_image(
             data=labels,
             tag=f"Labels",
@@ -514,7 +464,7 @@ def train_model(
     init_filters = int(init_filters)
     batch_size = int(batch_size)
     epochs = int(epochs)
-
+    # Define the network
     net = CoarseSegNet(
         learning_rate=learning_rate,
         batch_size=batch_size,
@@ -575,6 +525,7 @@ def train_model(
 
 
 if __name__ == "__main__":
+    # Define the arguments
     args = argparse.ArgumentParser()
     args.add_argument("--learning_rate", type=float, default=0.0008)
     args.add_argument("--batch_size", type=int, default=10)
@@ -586,9 +537,7 @@ if __name__ == "__main__":
     args.add_argument(
         "--experiment_name", type=str, default="default_coarse_prostate_experiment"
     )
-    # args.add_argument("--using_multi_gpu", type=bool, default=False)
-    # args.add_argument("--is_testing", type=bool, default=False)
-
+    # Parse the arguments
     args = args.parse_args()
     model_params = {
         "learning_rate": args.learning_rate,

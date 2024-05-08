@@ -38,6 +38,17 @@ load_dotenv()
 
 
 def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
+    """
+    Create a list of dictionaries containing the image paths for the dataset.
+    Parameters
+    ----------
+    base_data_path
+    is_testing
+
+    Returns
+    -------
+    data_dicts
+    """
     data_dicts = []
     for dir in base_data_path.iterdir():
         if dir.is_dir():
@@ -91,7 +102,7 @@ class ViTAutoEncoder(pl.LightningModule):
             "num_heads",
             "lr",
         )
-
+        # Create the model
         self.encoder = ViT(
             in_channels=in_channels,
             img_size=img_size,
@@ -102,7 +113,7 @@ class ViTAutoEncoder(pl.LightningModule):
             num_heads=num_heads,
             proj_type=proj_type,
         )
-
+        # Create the decoder
         self.decoder = CustomDecoder(
             hidden_size=hidden_size,
             decov_chns=deconv_chns,
@@ -132,6 +143,7 @@ class ViTAutoEncoder(pl.LightningModule):
             num_workers=self.number_workers,
             runtime_cache=True,
         )
+        # Create the validation dataset
         self.val_dataset = CacheDataset(
             data=test_image_paths,
             transform=self._get_train_transforms(),
@@ -142,6 +154,7 @@ class ViTAutoEncoder(pl.LightningModule):
 
     def _get_train_transforms(self):
         RandFlipd_prob = 0.5
+        # Define the training transforms
         return Compose(
             [
                 # ModalityStackTransformd(keys=["image"]),
@@ -207,17 +220,50 @@ class ViTAutoEncoder(pl.LightningModule):
         )
 
     def train_dataloader(self):
+        """
+        Create the training dataloader.
+        Returns
+        -------
+
+        """
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
 
     def val_dataloader(self):
+        """
+        Create the validation dataloader.
+        Returns
+        -------
+
+        """
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
 
     def forward(self, x):
+        """
+        Forward pass for the model.
+        Parameters
+        ----------
+        x
+
+        Returns
+        -------
+
+        """
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
+        """
+        Training step for the model.
+        Parameters
+        ----------
+        batch
+        batch_idx
+
+        Returns
+        -------
+
+        """
         inputs, inputs_2, gt_input = (
             batch["image"],
             batch["contrastive_patched"],
@@ -237,6 +283,17 @@ class ViTAutoEncoder(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        """
+        Validation step for the model.
+        Parameters
+        ----------
+        batch
+        batch_idx
+
+        Returns
+        -------
+
+        """
         inputs, gt_input = batch["image"], batch["reference_patched"]
         outputs, latent_space = self.forward(inputs)
         print(f"Output Shape: {outputs.shape}")
@@ -247,20 +304,52 @@ class ViTAutoEncoder(pl.LightningModule):
         return val_loss
 
     def configure_optimizers(self):
+        """
+        Configure the optimizer for the model.
+        Returns
+        -------
+        optimizer
+        """
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """
+        Save the model checkpoint.
+        Parameters
+        ----------
+        checkpoint
+
+        Returns
+        -------
+
+        """
         checkpoint["model"] = self.model.state_dict()
         checkpoint["encoder"] = self.encoder.state_dict()
         checkpoint["decoder"] = self.decoder.state_dict()
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """
+        Load the model checkpoint.
+        Parameters
+        ----------
+        checkpoint
+
+        Returns
+        -------
+
+        """
         self.model.load_state_dict(checkpoint["model"])
         self.encoder.load_state_dict(checkpoint["encoder"])
         self.decoder.load_state_dict(checkpoint["decoder"])
 
     def on_validation_epoch_end(self) -> None:
+        """
+        Validation epoch end.
+        Returns
+        -------
+
+        """
         val_loader = self.val_dataloader()
         images, contrastive, targets = (
             next(iter(val_loader))["image"],

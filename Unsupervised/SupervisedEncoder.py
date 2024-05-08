@@ -61,6 +61,17 @@ load_dotenv()
 def _create_image_dict(
     base_data_path: Path, is_testing: bool = False
 ) -> tuple[list, list]:
+    """
+    Create a list of dictionaries containing the image and label paths for each patient.
+    Parameters
+    ----------
+    base_data_path
+    is_testing
+
+    Returns
+    -------
+    tuple[list, list]
+    """
     image_data_dicts = []
     label_data_dicts = []
 
@@ -77,7 +88,9 @@ def _create_image_dict(
 
 
 class VitSupervisedAutoEncoder(pl.LightningModule):
-
+    """
+    A PyTorch Lightning module that trains a supervised encoder using a pre-trained unsupervised encoder.
+    """
     def __init__(
         self,
         encoder_path: str,
@@ -126,19 +139,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             )
         )
         self.up_kernel_size = [int(math.sqrt(i)) for i in self.patch_size]
-        # self.Decoder = CustomDecoder3D(
-        #     hidden_size=self.hidden_size,
-        #     initial_channels=self.deconv_chns,
-        #     final_channels=out_channels,
-        #     patch_size=self.patch_size,
-        #     img_dim=self.image_size,
-        #     num_up_blocks=2,  # Example
-        #     kernel_size=3,
-        #     upsample_kernel_size=self.up_kernel_size,
-        #     norm_name="batch",
-        #     conv_block=True,
-        #     res_block=True,
-        # )
+
         self.Decoder = CustomDecoder(
             hidden_size=self.hidden_size,
             decov_chns=self.deconv_chns,
@@ -154,23 +155,22 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             patch_size=self.patch_size,
         )
 
-        # make_dot(self.model, params=dict(self.model.named_parameters())).render( "SupervisedBackbonedAutoEncoder", format="png")
-
         self.lr = lr
 
         base_data_path = Path(os.getenv("PP_WITH_SEGMENTATION_PATH"))
         image_data_dict, label_data_dict = _create_image_dict(
             base_data_path, is_testing=self.testing
         )
+        # Split the data into training and validation sets
         data_dicts = [
             dict(**image, **label)
             for image, label in zip(image_data_dict, label_data_dict)
         ]
-
+        # Split the data into training and validation sets
         train_image_paths, test_image_paths = train_test_split(
             data_dicts, test_size=0.2, random_state=42
         )
-
+        # Create the training and validation datasets
         self.train_dataset = CacheDataset(
             data=train_image_paths,
             transform=self._get_train_transforms(),
@@ -178,6 +178,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             num_workers=self.number_workers,
             runtime_cache=True,
         )
+        # Create the training and validation datasets
         self.val_dataset = CacheDataset(
             data=test_image_paths,
             transform=self._get_val_transforms(),
@@ -194,6 +195,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             jaccard=False,
             reduction="mean",
         )
+        # TODO Check this loss function 1 channel output for now
         self.tv_loss = TverskyLoss(
             include_background=False,
             softmax=True,
@@ -201,15 +203,23 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             alpha=0.5,  # weight of false positive
             beta=0.5,  # weight of false negative
         )
+        #  dice metric
         self.dice_metric = DiceMetric(
             include_background=False,
             reduction="mean_channel",
         )
+        # hausdorff metric
         self.hausdorff_metric = HausdorffDistanceMetric(
             include_background=False, reduction="mean_channel", percentile=95
         )
 
     def _get_train_transforms(self):
+        """
+        Get the training transforms for the dataset.
+        Returns
+        -------
+        Compose
+        """
         RandFlipd_prob = 0.5
         return Compose(
             [
@@ -231,11 +241,16 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
                 RandGaussianNoiseD(keys=["image", "label"], prob=RandFlipd_prob / 2),
                 RandHistogramShiftD(keys=["image", "label"], prob=RandFlipd_prob / 2),
                 ToTensord(keys=["image", "label"], dtype=torch.float32),
-                # SaveImageD(keys=["contrastive_patched"], folder_layout=layout),
             ]
         )
 
     def _get_val_transforms(self):
+        """
+        Get the validation transforms for the dataset.
+        Returns
+        -------
+        Compose object
+        """
         return Compose(
             [
                 LoadImageD(keys=["image", "label"], image_only=False, dtype=np.float32),
@@ -245,17 +260,49 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         )
 
     def train_dataloader(self):
+        """
+        Get the training dataloader.
+        Returns
+        -------
+        DataLoader
+        """
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
 
     def val_dataloader(self):
+        """
+        Get the validation dataloader.
+        Returns
+        -------
+        DataLoader
+        """
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
 
     def forward(self, x):
+        """
+        Forward pass of the model.
+        Parameters
+        ----------
+        x
+
+        -------
+
+        """
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
+        """
+        Training step for the model.
+        Parameters
+        ----------
+        batch
+        batch_idx
+
+        Returns
+        -------
+        loss
+        """
         inputs, label = (
             batch["image"],
             batch["label"],
@@ -271,6 +318,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         self.hausdorff_metric(single_channel_preds, label)
         self.dice_metric(single_channel_preds, label)
 
+        # TODO Implement Post processing of removing small objects here
         loss = diceCE_loss + 0.25 * tv_loss
         self.log("train_combined_loss", loss, batch_size=self.batch_size)
         self.log("train_dice_loss", diceCE_loss, batch_size=self.batch_size)
@@ -290,17 +338,14 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # Get the inputs and labels
         inputs, label = (
             batch["image"],
             batch["label"],
         )
         outputs_v1, _hidden_states = self.forward(inputs)
         # TODO RUN PCA ON HIDDEN STATES ect
-        # print(f"Outputs values: {np.unique(outputs_v1.cpu().numpy())}")
 
-        # print(f"Output shape: {outputs_v1.shape}")
-        # print(f"label: {label.shape}")
-        #
         diceCE_loss = self.dice_loss_function(outputs_v1, label)
         tv_loss = self.tv_loss(outputs_v1, label)
 
@@ -309,12 +354,13 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
 
         self.hausdorff_metric(single_channel_preds, label)
         self.dice_metric(single_channel_preds, label)
-
+        # TODO Implement Post processing of removing small objects here
         loss = diceCE_loss + 0.25 * tv_loss
         self.log("val_combined_loss", loss)
         self.log("val_dice_loss", diceCE_loss)
         self.log("val_tv_loss", tv_loss)
         # TODO Track each metric for each class
+        #  log the metrics
         self.log(
             "val_hausdorff_distance",
             self.hausdorff_metric.aggregate().mean(),
@@ -331,10 +377,17 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+        # Create the optimizer
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
     def on_validation_epoch_end(self):
+        """
+        Function to run at the end of the validation epoch.
+        Returns
+        -------
+
+        """
         torch.no_grad()
         # Get the first batch of the validation data
         val_loader = self.val_dataloader()
@@ -358,6 +411,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         print(f"one_hot_label shape: {single_channel_preds.shape}")
         print(f"Images shape: {images.shape}")
 
+        # Log the images and predictions to TensorBoard
         monai.visualize.plot_2d_or_3d_image(
             data=labels,
             tag=f"label",
@@ -394,6 +448,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         scatter = axs[0].scatter(
             pca_results[:, 0], pca_results[:, 1], alpha=0.6, cmap="viridis"
         )
+
         axs[0].set_title("PCA Projection of Hidden States")
         axs[0].set_xlabel("Principal Component 1")
         axs[0].set_ylabel("Principal Component 2")
@@ -409,7 +464,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         axs[1].set_xlabel("t-SNE Dimension 1")
         axs[1].set_ylabel("t-SNE Dimension 2")
         plt.colorbar(scatter, ax=axs[1], label="Class Label")
-
+        # Save the figure to a buffer
         plt.tight_layout()
         self.logger.experiment.add_figure(
             "PCA and t-SNE Projections", fig, global_step=self.current_epoch
@@ -451,7 +506,7 @@ def train_model(
         lr=learning_rate,
         testing=testing,
     )
-
+    # Create the log directory
     current_file_loc = Path(__file__).parent
     log_dir = current_file_loc / "SupervisedEncoderLogs"
     log_dir.mkdir(exist_ok=True, parents=True)
@@ -464,6 +519,7 @@ def train_model(
         experiment_name + "-checkpoint-{epoch:02d}-dice--{val_dice_metric:.2f}"
     )
     top_k = 3
+    # Configure the model checkpoint callbacks
     checkpoint_callback = ModelCheckpoint(
         monitor="val_combined_loss",
         mode="min",
@@ -537,7 +593,7 @@ def do_main():
     parser.add_argument(
         "--testing", type=bool, default=False, help="Testing the model."
     )
-
+    # Parse the arguments
     args = parser.parse_args()
     train_model(
         learning_rate=args.learning_rate,

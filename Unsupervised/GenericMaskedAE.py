@@ -20,10 +20,11 @@ class GenericMAE(nn.Module):
         mask_rate=0.75,
     ):
         super().__init__()
+        # Save the original indexes of the masked and unmasked patches
         self.encoder = encoder
         self.decoder = decoder
         self.mask_rate = mask_rate
-
+        # Save the original indexes of the masked and unmasked patches
         self.patch_embedding = PatchEmbeddingBlock(
             in_channels=input_channels,
             img_size=image_size,
@@ -42,14 +43,17 @@ class GenericMAE(nn.Module):
         self.norm = nn.LayerNorm(hidden_size)
 
     def forward(self, x, training=True):
+        # Get the patch embeddings
         patch_embeddings = self.patch_embedding(x)
         if training:
+            # Mask the embeddings
             batch_size = x.shape[0]
             raw_positional_embeddings = self.patch_embedding.position_embeddings
             masked_patches = raw_positional_embeddings.repeat(batch_size, 1, 1)
             unmasked_tensor, masked_patches = self.split_tensor_and_record_new_indexes(
                 patch_embeddings, masked_patches
             )
+            # Encode the masked patches
             encoded_patches = self.encoder(masked_patches)
             encoded_patches = self.norm(encoded_patches)
             recustructed_patches = self.reconstruct_image(
@@ -69,6 +73,17 @@ class GenericMAE(nn.Module):
     def split_tensor_and_record_new_indexes(
         self, tensor: torch.Tensor, raw_positional_embeddings: torch.Tensor
     ):
+        """
+        Splits the tensor into masked and unmasked patches and records the new indexes of the patches.
+        Parameters
+        ----------
+        tensor
+        raw_positional_embeddings
+
+        Returns
+        -------
+        unmasked_tensor
+        """
         self.mask_index_mapping = {}
         self.masked_tensor = None
         for index in self.orig_masked_indexes:
@@ -97,6 +112,17 @@ class GenericMAE(nn.Module):
         return unmasked_tensor, self.masked_tensor
 
     def reconstruct_image(self, normalized_x, orig_tensor):
+        """
+        Reconstructs the image from the normalized tensor and the original tensor.
+        Parameters
+        ----------
+        normalized_x
+        orig_tensor
+
+        Returns
+        -------
+        reconstructed_image
+        """
         batch_dim = normalized_x.shape[0]
         if self.masked_tensor.shape[0] != batch_dim:
             raise ValueError(

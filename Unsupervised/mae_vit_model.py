@@ -48,7 +48,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         training_unsupervised: bool = False,
         number_of_patch_tensors: int = 3,
     ) -> None:
-
+        # Save the original indexes of the masked and unmasked patches
         self.mask_rate = mask_rate
         self.mask_dict = {}  # Dict of index of patches to mask and the masked patches
         self.unmasked_dict = (
@@ -73,6 +73,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
                 qkv_bias,
                 save_attn,
             )
+            # Save the original indexes of the masked and unmasked patches
             self.index_order = [i for i in range(self.patch_embedding.n_patches)]
             self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
                 self.index_order, test_size=self.mask_rate
@@ -81,6 +82,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
             self.orig_image_size = img_size
 
         else:
+            # For testing purposes, we want to be able to set the indexes of the masked and unmasked patches
             self.index_order = [i for i in range(number_of_patch_tensors)]
             self.orig_unmasked_indexes, self.orig_masked_indexes = train_test_split(
                 self.index_order, test_size=self.mask_rate, random_state=42
@@ -95,6 +97,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
         spatial_size = x.shape[2:]
 
         batch_size = x.shape[0]
+        # Get the patch embeddings
         raw_patched_image_with_embeddings = self.patch_embedding(x)
         raw_positional_embeddings = self.patch_embedding.position_embeddings
         masked_patches = raw_positional_embeddings.repeat(batch_size, 1, 1)
@@ -103,12 +106,9 @@ class MAEViTAutoEnc(ViTAutoEnc):
             unmasked_tensor, masked_patches = self.split_tensor_and_record_new_indexes(
                 raw_patched_image_with_embeddings, masked_patches
             )
-            # print("shape of masked patches: ", masked_patches.shape)
-            # print("shape of unmasked tensor: ", unmasked_tensor.shape)
         else:
             unmasked_tensor = raw_patched_image_with_embeddings
         # Masked patches
-        # print("shape of raw_patched_image_with_embeddings: ", raw_patched_image_with_embeddings.shape)
         hidden_states_out = []
         for blk in self.blocks:
             unmasked_tensor = blk(unmasked_tensor)
@@ -118,6 +118,7 @@ class MAEViTAutoEnc(ViTAutoEnc):
             unmasked_tensor, raw_patched_image_with_embeddings
         )
         concated_masked = concated_masked.transpose(1, 2)
+        # reshape the tensor
         d = [s // p for s, p in zip(spatial_size, self.patch_size)]
         ## possible latent space
         x = torch.reshape(
@@ -130,6 +131,15 @@ class MAEViTAutoEnc(ViTAutoEnc):
         return x, hidden_states_out
 
     def decoder(self, x):
+        """
+        Forward pass of the decoder.
+        Parameters
+        ----------
+        x
+
+        Returns
+        -------
+        """
         x = self.conv3d_transpose(x)
         x = self.conv3d_transpose_1(x)
         return x
@@ -137,10 +147,23 @@ class MAEViTAutoEnc(ViTAutoEnc):
     def split_tensor_and_record_new_indexes(
         self, tensor: torch.Tensor, raw_positional_embeddings: torch.Tensor
     ):
+        """
+        Splits the tensor into masked and unmasked patches and records the new indexes of the patches.
+        Parameters
+        ----------
+        tensor
+        raw_positional_embeddings
+
+        Returns
+        -------
+        unmasked_tensor
+        """
         self.mask_index_mapping = {}
         self.masked_tensor = None
+        # add the masked patches to the mask_dict
         for index in self.orig_masked_indexes:
             extracol = raw_positional_embeddings[:, index, :].unsqueeze(1)
+            # loop through the masked patches and add them to the mask_dict
             if self.masked_tensor is None:
                 self.masked_tensor = extracol
                 new_index = 0
@@ -152,8 +175,10 @@ class MAEViTAutoEnc(ViTAutoEnc):
 
         unmasked_tensor = None
         self.unmasked_index_mapping = {}
+        # add the unmasked patches to the unmasked_dict
         for index in self.orig_unmasked_indexes:
             extracol = tensor[:, index, :].unsqueeze(1)
+            # loop through the unmasked patches and add them to the unmasked_dict
             if unmasked_tensor is None:
                 unmasked_tensor = extracol
                 new_index = 0
@@ -165,37 +190,44 @@ class MAEViTAutoEnc(ViTAutoEnc):
         return unmasked_tensor, self.masked_tensor
 
     def reconstruct_image(self, normalized_x, orig_tensor):
+        """
+        Reconstructs the image from the normalized tensor and the original tensor.
+        Parameters
+        ----------
+        normalized_x
+        orig_tensor
+
+        Returns
+        -------
+        reconstructed_image
+        """
+        # Reconstruct the image from the normalized tensor and the original tensor.
         batch_dim = normalized_x.shape[0]
         if self.masked_tensor.shape[0] != batch_dim:
+            # Check if the batch dimension of the masked tensor and the normalized tensor are the same
             raise ValueError(
                 "The batch dimension of the masked tensor and the normalized tensor must be the same"
             )
         print("----------------------STARTING RECONSTRUCTION----------------------------------")
-        # print(f"Shape of masked tensor: {self.masked_tensor.shape}")
         print(f"Shape of normalized tensor: {normalized_x.shape}")
         print(f"Shape of original tensor: {orig_tensor.shape}")
         print("-----------------------END RECONSTRUCTION---------------------------------")
+
         # Use an index mapping to reconstruct the image
         reconstructed_image = torch.zeros_like(orig_tensor)
         print("maskIndexMapping: ", len(self.mask_index_mapping.keys()))
         print("unmaskedIndexMapping: ", len(self.unmasked_index_mapping.keys()))
         allIndexes = self.mask_index_mapping.keys() & self.unmasked_index_mapping.keys()
         print("All Indexes: ", len(allIndexes))
-        # for i in range(800):
-        #     if i not in allIndexes:
-        #         print(f"Index {i} not in allIndexes")
-        # print("All Indexes: ", sorted(allIndexes))
-        # print(f"Shape of reconstructed image: {reconstructed_image.shape}")
-        # print("AAAALLLLLLL", allIndexes)
+        # Loop through the masked indexes and add them to the reconstructed image
         for orig_index, new_index in self.mask_index_mapping.items():
             reconstructed_image[:, orig_index, :] = self.masked_tensor[:, new_index, :]
-
+        # Loop through the unmasked indexes and add them to the reconstructed image
         for orig_index, new_index in self.unmasked_index_mapping.items():
             reconstructed_image[:, orig_index, :] = normalized_x[:, new_index, :]
-            # print(f"Orig index: {orig_index}, New index: {new_index} ")
         return reconstructed_image
 
-
+# Unit tests for the MAEViTAutoEnc class
 class TestMaskMapper(unittest.TestCase):
 
     def test_mapping(self):

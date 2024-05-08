@@ -160,15 +160,17 @@ def check_study_complete(study_dir: Path, is_mask: bool):
 
 
 if __name__ == "__main__":
+    # get all the subject directories
     prostatX_data = Path(
         "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/ProstateX/ProstateX_DICOM/manifest-A3Y4AE4o5818678569166032044/PROSTATEx"
     )
     prostatX_segmentation_data = Path("/Segmentations/PROSTATEx")
     default_output_dir = Path("/ALL_PROSTATEx/WITHOUT_SEGMENTATION/RAW")
     with_segmentation_output_dir = Path("/ALL_PROSTATEx/WITH_SEGMENTATION/RAW")
+    # create the output directories
     default_output_dir.mkdir(parents=True, exist_ok=True)
     with_segmentation_output_dir.mkdir(parents=True, exist_ok=True)
-
+    # get all the subject directories
     subject_dirs = [
         x for x in prostatX_data.iterdir() if x.is_dir() and "ProstateX" in x.name
     ]
@@ -177,9 +179,10 @@ if __name__ == "__main__":
         for x in prostatX_segmentation_data.iterdir()
         if x.is_dir() and "ProstateX" in x.name
     ]
+    # get the names of the subject directories and the segmentation directories
     segmentation_names = [x.name for x in segmentation_dirs]
     subject_names = [x.name for x in subject_dirs]
-
+    # iterate over the subject directories
     for subject_dir in subject_dirs:
         has_corresponding_segmentation = subject_dir.name in segmentation_names
         if check_study_complete(subject_dir, has_corresponding_segmentation):
@@ -220,6 +223,7 @@ if __name__ == "__main__":
 
             print(f"Segmentation output file: {segmentation_output_file}")
         image_output_dir.mkdir(parents=True, exist_ok=True)
+        # write the images to the output directory
         for image_name, image in best_images.items():
             # print(f"Image name: {image_name}")
             # print(f"Image: {image}")

@@ -56,6 +56,9 @@ def _create_image_dict(base_data_path: Path, is_testing: bool = False) -> list:
 
 
 class LitAutoEncoder(pl.LightningModule):
+    """
+    PyTorch Lightning module for training the Vision Transformer AutoEncoder.
+    """
     def __init__(
         self,
         img_size,
@@ -135,6 +138,12 @@ class LitAutoEncoder(pl.LightningModule):
         )
 
     def _get_train_transforms(self):
+        """
+        Get the training transforms for the dataset.
+        Returns
+        -------
+        transforms: Compose
+        """
         RandFlipd_prob = 0.5
         return Compose(
             [
@@ -218,17 +227,50 @@ class LitAutoEncoder(pl.LightningModule):
         )
 
     def train_dataloader(self):
+        """
+        Get the training dataloader.
+        Returns
+        -------
+        DataLoader
+        """
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
 
     def val_dataloader(self):
+        """
+        Get the validation dataloader.
+        Returns
+        -------
+        DataLoader
+        """
         print(f"Train Dataset: {len(self.train_dataset)}")
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
 
     def forward(self, x):
+        """
+        Forward pass of the model.
+        Parameters
+        ----------
+        x
+
+        Returns
+        -------
+
+        """
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
+        """
+        Training step for the model.
+        Parameters
+        ----------
+        batch
+        batch_idx
+
+        Returns
+        -------
+        loss
+        """
         inputs, inputs_2, gt_input = (
             batch["image"],
             batch["contrastive_patched"],
@@ -248,6 +290,17 @@ class LitAutoEncoder(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        """
+        Validation step for the model.
+        Parameters
+        ----------
+        batch
+        batch_idx
+
+        Returns
+        -------
+        val_loss
+        """
         inputs, gt_input = batch["image"], batch["reference_patched"]
         outputs, latent_space = self.forward(inputs)
         print(f"Output Shape: {outputs.shape}")
@@ -258,10 +311,21 @@ class LitAutoEncoder(pl.LightningModule):
         return val_loss
 
     def configure_optimizers(self):
+        '''
+        Configure the optimizer for the model.
+        Returns
+        -------
+        optimizer
+        '''
         optimizer = Adam(self.model.parameters(), lr=self.lr)
         return optimizer
 
     def on_validation_epoch_end(self) -> None:
+        """
+        Log the images and predictions at the end of the validation epoch.
+        Returns
+        -------
+        """
         val_loader = self.val_dataloader()
         images, contrastive, targets = (
             next(iter(val_loader))["image"],
@@ -442,6 +506,11 @@ def visualize_output(inputs, outputs, file_path=None):
 
 
 def do_main():
+    """
+    Main function to run the training of the model.
+    Returns
+    ------
+    """
     parser = argparse.ArgumentParser(
         description="Train the AutoEncoder with Vision Transformer."
     )
@@ -516,8 +585,9 @@ def do_main():
     parser.add_argument(
         "--testing", type=bool, default=False, help="Testing the model."
     )
-
+    # Parse the arguments
     args = parser.parse_args()
+    # Train the model
     train_model(
         learning_rate=args.learning_rate,
         batch_size=args.batch_size,
@@ -537,5 +607,3 @@ def do_main():
 
 if __name__ == "__main__":
     do_main()
-    # evaluate_model("/home/iejohnson/programing/Supervised_learning/AML/Unsupervised/UnsupervisedEncoderLogs/Unsupervised_16_layer_heads-checkpoint-epoch=1208-val_loss=0.35.ckpt")
-    # evaluate_model("/localscratch/Users/iejohnson/DATA/UnsupervisedResults/UnsupervisedEncoderLogs/Unsupervised_16layer_perceptron_double_hiddensize_mlp_5000e-checkpoint-epoch=4156-val_loss=0.39.ckpt")
