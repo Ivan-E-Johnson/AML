@@ -113,9 +113,7 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
             proj_type=self.proj_type,
             # classification=True,
         )
-        self.encoder.load_state_dict(
-            checkpoint["state_dict"], strict=False, assign=True
-        )
+        self.encoder.load_state_dict(checkpoint["encoder"], strict=False, assign=True)
 
         self.deconv_chns = decov_chns
         self.save_hyperparameters(
@@ -377,30 +375,44 @@ class VitSupervisedAutoEncoder(pl.LightningModule):
         # Select a layer's hidden states; assuming using layer index 0 for visualization
         selected_hidden_states = hidden_states[0].cpu().numpy()
 
+        # Flatten the hidden states if necessary
+        reshaped_states = selected_hidden_states.reshape(
+            -1, selected_hidden_states.shape[-1]
+        )
+
         # Perform PCA
         pca = PCA(n_components=2)
-        pca_results = pca.fit_transform(
-            selected_hidden_states.reshape(-1, selected_hidden_states.shape[-1])
-        )
+        pca_results = pca.fit_transform(reshaped_states)
 
         # Perform t-SNE
         tsne = TSNE(n_components=2, random_state=42)
-        tsne_results = tsne.fit_transform(
-            selected_hidden_states.reshape(-1, selected_hidden_states.shape[-1])
-        )
+        tsne_results = tsne.fit_transform(reshaped_states)
+
+        # Convert labels to CPU and numpy for visualization
+        np_labels = labels.cpu().numpy().flatten()
 
         # Plot PCA and t-SNE results and log to TensorBoard
         fig, axs = plt.subplots(1, 2, figsize=(12, 6))
 
-        axs[0].scatter(pca_results[:, 0], pca_results[:, 1], alpha=0.6)
+        scatter = axs[0].scatter(
+            pca_results[:, 0], pca_results[:, 1], c=np_labels, alpha=0.6, cmap="viridis"
+        )
         axs[0].set_title("PCA Projection of Hidden States")
         axs[0].set_xlabel("Principal Component 1")
         axs[0].set_ylabel("Principal Component 2")
+        plt.colorbar(scatter, ax=axs[0], label="Class Label")
 
-        axs[1].scatter(tsne_results[:, 0], tsne_results[:, 1], alpha=0.6)
+        scatter = axs[1].scatter(
+            tsne_results[:, 0],
+            tsne_results[:, 1],
+            c=np_labels,
+            alpha=0.6,
+            cmap="viridis",
+        )
         axs[1].set_title("t-SNE Projection of Hidden States")
         axs[1].set_xlabel("t-SNE Dimension 1")
         axs[1].set_ylabel("t-SNE Dimension 2")
+        plt.colorbar(scatter, ax=axs[1], label="Class Label")
 
         plt.tight_layout()
         self.logger.experiment.add_figure(
