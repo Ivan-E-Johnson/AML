@@ -23,7 +23,7 @@ def init_stacked_data_lists():
     list: A list of image paths.
     list: A list of mask paths.
     """
-    base_data_path = Path(os.environ.get("DATA_PATH"))
+    base_data_path = Path(os.environ.get("STACKED_DATA_PATH"))
     print(f"Base data path: {base_data_path}")
     # base_data_path = Path(
     #     "/Users/iejohnson/School/spring_2024/AML/Supervised_learning/DATA/preprocessed_data"
@@ -178,3 +178,31 @@ def convert_logits_to_one_hot(logits):
     prob_outputs = torch.nn.functional.one_hot(prob_outputs, num_classes=num_classes)
     prob_outputs = prob_outputs.moveaxis(-1, 1)
     return prob_outputs
+
+
+def convert_one_hot_to_label(one_hot):
+    """
+    This function converts a one-hot encoded tensor to a label tensor.
+
+    Args:
+    one_hot (torch.Tensor): The one-hot encoded tensor.
+
+    Returns:
+    torch.Tensor: The label tensor.
+    """
+    label = one_hot.argmax(dim=1)
+    return label
+
+
+def convert_AutoEncoder_output_to_labelpred(logits):
+    """
+    This function converts a one-hot encoded tensor to a label tensor.
+
+    Args:
+    one_hot (torch.Tensor): The one-hot encoded tensor.
+
+    Returns:
+    torch.Tensor: The label tensor.
+    """
+    prob_outputs = torch.softmax(logits, dim=1)
+    return prob_outputs.argmax(dim=1).unsqueeze(1)
